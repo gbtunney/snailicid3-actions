@@ -53,13 +53,18 @@
         "clean:self": "pnpm exec nx run $npm_package_name:clean"
     },
     "dependencies": {
-        "@gbt/root": "link:"
+        "@actions/artifact": "^6.2.1",
+        "@actions/core": "^3.0.1",
+        "@actions/github": "^9.1.1",
+        "@actions/io": "^3.0.2"
     },
     "devDependencies": {
         "@changesets/cli": "^2.29.8",
         "@commitlint/cli": "^21.0.0",
         "@commitlint/config-conventional": "^21.0.0",
         "@commitlint/types": "^21.0.0",
+        "@github/local-action": "^7.0.1",
+        "@snailicid3/build-config": "^0.0.5",
         "@snailicid3/config": "^0.0.6",
         "@types/node": "^25.9.1",
         "cross-var": "^1.1.0",
@@ -70,8 +75,10 @@
         "markdownlint-cli2": "^0.22.1",
         "nx": "^22.7.3",
         "prettier": "^3.8.1",
+        "tsdown": "^0.22.0",
         "typescript": "^6.0.3",
-        "verdaccio": "^6.2.5"
+        "verdaccio": "^6.2.5",
+        "vitest": "^4.1.7"
     },
     "type": "module",
     "author": {

@@ -4,12 +4,22 @@
         "types": ["node"],
         "noEmit": false
     },
+    "exclude": ["./node_modules"],
     "files": [
+        "package.json",
         "./commitlint.config.ts",
         "./.markdownlint-cli2.mts",
         ".lintstagedrc.mts"
     ],
-
-    "include": ["./*.ts", "./*.mts", "./*.cts"],
-    "exclude": ["node_modules", "scratch"]
+    "include": [
+        "./*.ts",
+        "./*.cts",
+        "./*.mts",
+        "./src/**/*.ts",
+        "./src/**/*.cts",
+        "./src/**/*.mts",
+        "./**/*.test.ts",
+        "./**/*.test.mts",
+        "./**/*.test.cts"
+    ]
 }
