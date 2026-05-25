@@ -1,0 +1,96 @@
+{
+    "name": "@gbt/root",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Boilerplate for monorepo root",
+    "scripts": {
+        "\n========== COMMIT >> ==========": "",
+        "commit": "pnpm build:self && pnpm exec scope-commit --checked-commit",
+        "commit:direct": "git commit --no-verify -m",
+        "lint:staged": "pnpm exec lint-staged --relative",
+        "\n========== BUILD >> ==========": "",
+        "build": "pnpm nx:build",
+        "build:self": "pnpm exec nx run $npm_package_name:build",
+        "nx:build": "pnpm exec nx run-many -t build",
+        "\n========== TEST >> ==========": "",
+        "test": "pnpm nx:test",
+        "nx:test": "pnpm exec nx run-many --target=test",
+        "\n========== DOCUMENTATION >> ==========": "",
+        "docs:build": "pnpm nx:docs:build",
+        "nx:docs:build": "pnpm exec nx run-many -t docs:build",
+        "\n========== API REPORT >> ==========": "",
+        "api:report": "pnpm exec nx run-many --target=api:report",
+        "api:check": "pnpm exec nx run-many --target=api:check",
+        "\n========== INSPECT >> ==========": "",
+        "inspect:nx": "pnpm nx:graph",
+        "inspect:lint": "pnpm exec eslint-config-inspector --no-open",
+        "inspect:vitest": "pnpm exec vitest --ui",
+        "\n========== LIFECYCLE >> ==========": "",
+        "start": "pnpm install && pnpm build",
+        "uninstall": "pnpm exec gbt-uninstall",
+        "setup": "pnpm exec gbt-setup",
+        "reset": "pnpm run uninstall && pnpm start",
+        "prepare": "husky",
+        "postinstall": "pnpm build:self && echo '\n=== >> Success:: Install complete.'",
+        "\n========== PUBLISH >> ==========": "",
+        "create:changeset": "pnpm pre:changeset && pnpm exec gbt-changeset",
+        "pre:changeset": "pnpm run fix && pnpm run test && pnpm docs:build",
+        "release:archive": "pnpm -r exec mkdir -p ./releases &&  pnpm -r --access public pack --pack-destination='./releases'",
+        "prerelease": "pnpm exec pnpm run build && pnpm run fix && pnpm run check && pnpm test",
+        "registry:start": "pnpm exec verdaccio",
+        "\n========== NX >> ==========": "",
+        "nx:graph": "pnpm nx graph",
+        "nx:affected": "nx affected --target=build",
+        "nx:reset": "pnpm exec nx reset",
+        "\n========== CHECK >> ==========": "",
+        "check": "pnpm exec nx run-many -t lint",
+        "check:md": "pnpm exec nx run $npm_package_name:build:lint:md",
+        "\n========== FIX >> ==========": "",
+        "fix": "pnpm exec nx run-many -t fix",
+        "fix:md": "pnpm exec nx run $npm_package_name:fix:md",
+        "\n========== CLEAN >> ==========": "",
+        "clean": "pnpm exec nx run-many -t clean",
+        "clean:self": "pnpm exec nx run $npm_package_name:clean"
+    },
+    "dependencies": {
+        "@gbt/root": "link:"
+    },
+    "devDependencies": {
+        "@changesets/cli": "^2.29.8",
+        "@commitlint/cli": "^21.0.0",
+        "@commitlint/config-conventional": "^21.0.0",
+        "@commitlint/types": "^21.0.0",
+        "@snailicid3/config": "^0.0.6",
+        "@types/node": "^25.9.1",
+        "cross-var": "^1.1.0",
+        "dotenv-cli": "^11.0.0",
+        "eslint": "^10.3.0",
+        "husky": "^9.1.7",
+        "lint-staged": "^16.2.7",
+        "markdownlint-cli2": "^0.22.1",
+        "nx": "^22.7.3",
+        "prettier": "^3.8.1",
+        "typescript": "^6.0.3",
+        "verdaccio": "^6.2.5"
+    },
+    "type": "module",
+    "author": {
+        "name": "Gillian Tunney",
+        "email": "gbtunney@mac.com"
+    },
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/gbtunney/gbt-template-boilerplate"
+    },
+    "packageManager": "pnpm@10.30.2+sha512.36cdc707e7b7940a988c9c1ecf88d084f8514b5c3f085f53a2e244c2921d3b2545bc20dd4ebe1fc245feec463bb298aecea7a63ed1f7680b877dc6379d8d0cb4",
+    "engines": {
+        "node": ">=20.x"
+    },
+    "keywords": [
+        "boilerplate"
+    ],
+    "nx": {
+        "includedScripts": []
+    }
+}
