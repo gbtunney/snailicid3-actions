@@ -1,0 +1,9 @@
+name: ✨ Report Prettier
+description: Run prettier --check and report formatting status.
+
+runs:
+    using: composite
+    steps:
+        - name: ✨ Prettier Check
+          shell: bash
+          run: bash "${{ github.action_path }}/../../scripts/report-prettier.sh"

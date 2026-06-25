@@ -1,0 +1,9 @@
+name: 📦 Report Workspace
+description: Report workspace package/app counts, changed scopes, and dependency status.
+
+runs:
+    using: composite
+    steps:
+        - name: 📦 Workspace Data
+          shell: bash
+          run: bash "${{ github.action_path }}/../../scripts/report-workspace.sh"
