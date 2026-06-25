@@ -1,0 +1,9 @@
+name: 🩺 Report Environment
+description: Report environment info (Node, pnpm, git versions, cwd, OS).
+
+runs:
+    using: composite
+    steps:
+        - name: 🩺 Environment Data
+          shell: bash
+          run: bash "${{ github.action_path }}/../../scripts/report-env.sh"
