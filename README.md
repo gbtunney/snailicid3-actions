@@ -66,6 +66,21 @@ copy them into `<your-repo>/.github/workflows/` verbatim.
 cp path/to/snailicid3-actions/templates/workflows/*.yml .github/workflows/
 ```
 
+To stamp all local clones at once, use the sync script:
+
+```sh
+bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-monorepov2 ../gbt-schema-form
+```
+
+**Planned (not yet built): auto-PR sync.** Once the template set stabilizes, a
+`dispatch-sync-callers.yml` workflow in this repository will propagate template
+changes automatically: triggered on pushes to `main` touching `templates/**`
+(plus manual dispatch), a matrix job per consumer repo checks the repo out,
+runs the same sync, commits with a scope-commit-derived message, and opens a PR
+in that repo. It needs the `GH_PAT` secret with `workflow` scope — the default
+`GITHUB_TOKEN` cannot push workflow files to other repositories. Deferred
+deliberately until the migration dust settles.
+
 They contain no repo-specific values. Per-repo behavior is controlled without
 editing the files:
 
