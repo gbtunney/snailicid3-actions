@@ -54,6 +54,76 @@ Callers must install dependencies before using actions that invoke `snail-sh`:
 
 The `snail-sh` CLI ships as part of `@snailicid3/config` (the `bin/` directory is published to npm). Any project with `@snailicid3/config` in its dependencies will have it available via `pnpm exec snail-sh`.
 
+### Caller workflow templates
+
+GitHub can only share `workflow_call` workflows across repositories — the thin
+trigger workflows (`dispatch-*`, `pr-checks`, `push-main`, `push-release`) must
+physically exist in every repo. The canonical copies live in
+[`templates/workflows/`](templates/workflows/): to onboard or update a repo,
+copy them into `<your-repo>/.github/workflows/` verbatim.
+
+```sh
+cp path/to/snailicid3-actions/templates/workflows/*.yml .github/workflows/
+```
+
+To stamp all local clones at once, use the sync script:
+
+```sh
+bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
+bin/sync-callers.sh --chromatic ../gbt-monorepov2
+```
+
+**Planned (not yet built): auto-PR sync.** Once the template set stabilizes, a
+`dispatch-sync-callers.yml` workflow in this repository will propagate template
+changes automatically: triggered on pushes to `main` touching `templates/**`
+(plus manual dispatch), a matrix job per consumer repo checks the repo out,
+runs the same sync, commits with a scope-commit-derived message, and opens a PR
+in that repo. It needs the `GH_PAT` secret with `workflow` scope — the default
+`GITHUB_TOKEN` cannot push workflow files to other repositories. Deferred
+deliberately until the migration dust settles.
+
+Behavior is controlled by explicit workflow inputs, following the repo
+pattern: every `call-*` input has a matching `dispatch-*` input for manual
+runs, and the triggered callers (`pr-checks`, `push-*`) pass the same inputs
+with values written in the file. The only repo-specific line is
+`run_chromatic:` in `pr-checks`/`push-main` — `bin/sync-callers.sh --chromatic`
+sets it to `true` during sync for repos that use Chromatic. Secrets
+(`CHROMATIC_PROJECT_TOKEN`, `NPM_TOKEN`, `GH_PAT`) flow through
+`secrets: inherit`; the `DISABLE_NX_CLOUD` repository variable remains the one
+vars-based switch (pre-existing Nx Cloud policy).
+
+### Chromatic
+
+`call-pipeline.yml` can run Chromatic visual tests. It executes
+`pnpm exec nx run-many -t chromatic`, which runs each project's `chromatic`
+package.json script (Nx infers scripts as targets); projects without one are
+skipped, so it is safe to enable repo-wide.
+
+Requirements in the calling repository:
+
+1. A `chromatic` script in each Storybook project's package.json that reads
+   `$CHROMATIC_PROJECT_TOKEN` (see `@gbt/template-example-react`).
+2. The `CHROMATIC_PROJECT_TOKEN` repository secret (from the Chromatic project
+   settings page) — the only secret Chromatic needs.
+3. Pass the flag and the secret when calling the pipeline:
+
+```yaml
+jobs:
+  pipeline:
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+    secrets: inherit
+    with:
+      run_build: true
+      run_test: true
+      run_chromatic: true
+```
+
+Repositories that don't need Chromatic (e.g. snailicid3) keep
+`run_chromatic: false` in their callers (the template default). Manual runs:
+`dispatch-pipeline` exposes `run_chromatic` as a checkbox, so Chromatic can be
+triggered and tested by hand in any repo with the secret set, independent of
+what the triggered callers do.
+
 ## Commit message convention
 
 Every commit these workflows create (and every PR title they generate) is derived

@@ -1,0 +1,25 @@
+# ─────────────────────────────────────────────────────────────
+# CALLER TEMPLATE — copy this file into <your-repo>/.github/workflows/
+# Source of truth: gbtunney/snailicid3-actions/templates/workflows/
+# These are thin triggers; all logic lives in the reusable call-* workflows.
+# ─────────────────────────────────────────────────────────────
+name: Dispatch Release State
+
+on:
+    workflow_dispatch:
+        inputs:
+            ref:
+                description: Branch, tag, or SHA to inspect.
+                required: true
+                default: main
+                type: string
+
+permissions:
+    contents: read
+
+jobs:
+    detect:
+        name: detect release state
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@main
+        with:
+            ref: ${{ inputs.ref }}

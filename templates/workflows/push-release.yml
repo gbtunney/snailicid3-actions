@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────
+# CALLER TEMPLATE — copy this file into <your-repo>/.github/workflows/
+# Source of truth: gbtunney/snailicid3-actions/templates/workflows/
+# These are thin triggers; all logic lives in the reusable call-* workflows.
+# ─────────────────────────────────────────────────────────────
+# Runs only after merge to `main`.
+name: Push Release
+
+on:
+    push:
+        branches:
+            - main
+
+concurrency:
+    group: release-main
+    cancel-in-progress: false
+
+permissions:
+    actions: write
+    contents: write
+    pull-requests: write
+    id-token: write
+
+env:
+    HUSKY: 0
+    NPM_CONFIG_PROVENANCE: true
+    NX_NO_CLOUD: 'true'
+
+jobs:
+    release_plan:
+        name: release plan
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@main
+        secrets: inherit
+        with:
+            ref: ''
+            dry_run: false
+            allow_non_main: false
+            run_pipeline: true
+            upload_workspace_artifact: true
+            require_lockfile: true
+            node_version: lts/*
+            pnpm_cache: true

@@ -1,0 +1,151 @@
+# ─────────────────────────────────────────────────────────────
+# CALLER TEMPLATE — copy this file into <your-repo>/.github/workflows/
+# Source of truth: gbtunney/snailicid3-actions/templates/workflows/
+# These are thin triggers; all logic lives in the reusable call-* workflows.
+# ─────────────────────────────────────────────────────────────
+name: PR Checks
+
+on:
+    pull_request:
+        branches:
+            - main
+    workflow_dispatch:
+
+concurrency:
+    group: pr-${{ github.event.pull_request.number || github.ref_name }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+env:
+    HUSKY: 0
+
+jobs:
+    merge_main:
+        name: merge main
+        runs-on: ubuntu-latest
+        if: ${{ github.event_name == 'pull_request' }}
+        steps:
+            - name: Checkout pull request merge ref
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+                  ref: refs/pull/${{ github.event.pull_request.number }}/merge
+
+            - name: Confirm PR is mergeable with main
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  echo "Checked out merge ref: refs/pull/${{ github.event.pull_request.number }}/merge"
+                  git status --short
+                  git rev-parse --verify HEAD
+
+    detect:
+        name: detect release state
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@main
+        with:
+            ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    pending_changeset:
+        name: pending changeset
+        needs: detect
+        if: ${{ needs.detect.outputs.should_version == 'true' }}
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+        secrets: inherit
+        with:
+            run_chromatic: false
+            checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
+            mode: abort_on_error
+            check_mode: check
+            require_lockfile: true
+            require_clean_repo: true
+            run_build: true
+            run_test: true
+            run_docs_build: true
+            api_report_mode: update
+            pnpm_cache: true
+
+    pending_release:
+        name: pending release
+        needs: detect
+        if: ${{ needs.detect.outputs.should_publish == 'true' }}
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+        secrets: inherit
+        with:
+            run_chromatic: false
+            checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
+            mode: abort_on_error
+            check_mode: check
+            require_lockfile: true
+            require_clean_repo: true
+            run_build: true
+            run_test: true
+            run_docs_build: true
+            api_report_mode: check
+            pnpm_cache: true
+
+    main:
+        name: main
+        needs: detect
+        if: ${{ needs.detect.outputs.should_skip == 'true' }}
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+        secrets: inherit
+        with:
+            run_chromatic: false
+            checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
+            mode: abort_on_error
+            check_mode: check
+            require_lockfile: true
+            require_clean_repo: true
+            run_build: true
+            run_test: true
+            run_docs_build: false
+            pnpm_cache: true
+
+    required:
+        name: required
+        runs-on: ubuntu-latest
+        needs: [merge_main, detect, pending_changeset, pending_release, main]
+        if: ${{ always() }}
+        steps:
+            - name: Require selected PR check phase to pass
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  if [[ "${{ github.event_name }}" == "pull_request" &&
+                        "${{ needs.merge_main.result }}" != "success" ]]; then
+                    echo "::error::PR merge ref check failed with result: ${{ needs.merge_main.result }}"
+                    exit 1
+                  fi
+
+                  if [[ "${{ needs.detect.result }}" != "success" ]]; then
+                    echo "::error::Release-state detection failed with result: ${{ needs.detect.result }}"
+                    exit 1
+                  fi
+
+                  phase=""
+                  result=""
+
+                  if [[ "${{ needs.detect.outputs.should_version }}" == "true" ]]; then
+                    phase="pending changeset"
+                    result="${{ needs.pending_changeset.result }}"
+                  elif [[ "${{ needs.detect.outputs.should_publish }}" == "true" ]]; then
+                    phase="pending release"
+                    result="${{ needs.pending_release.result }}"
+                  elif [[ "${{ needs.detect.outputs.should_skip }}" == "true" ]]; then
+                    phase="main"
+                    result="${{ needs.main.result }}"
+                  else
+                    echo "::error::Release-state detection did not select a PR check phase."
+                    exit 1
+                  fi
+
+                  echo "Selected PR check phase: $phase"
+                  echo "Selected PR check result: $result"
+
+                  if [[ "$result" != "success" ]]; then
+                    echo "::error::Required PR check phase failed: $phase ($result)"
+                    exit 1
+                  fi

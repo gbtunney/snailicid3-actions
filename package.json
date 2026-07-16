@@ -2,6 +2,7 @@
     "name": "@snailicid3/actions-fixture",
     "version": "0.0.0",
     "private": true,
+    "packageManager": "pnpm@10.33.0",
     "description": "Fixture workspace so the workflows and composite actions in this repository can run against the published @snailicid3/config toolchain (snail-sh, scope-commit, scope-affected) in self-tests.",
     "devDependencies": {
         "@snailicid3/config": "^0.1.3",
