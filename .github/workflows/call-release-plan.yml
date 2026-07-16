@@ -79,9 +79,11 @@ on:
                 type: boolean
 
             node_version:
-                description: Node version to run the validation pipeline with.
+                description: Node version to run the validation pipeline with. Prefer a concrete major (e.g. '24')
+                    over an alias like 'lts/*' so setup-node resolves from the runner toolcache instead of fetching
+                    GitHub's version manifest over the network.
                 required: false
-                default: lts/*
+                default: '24'
                 type: string
 
             pnpm_cache:

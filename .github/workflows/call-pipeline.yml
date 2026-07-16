@@ -77,9 +77,12 @@ on:
                 type: string
 
             node_version:
-                description: Node version to run the pipeline with.
+                description: Node version to run the pipeline with. Prefer a
+                    concrete major (e.g. '24') over an alias like 'lts/*' so
+                    setup-node resolves from the runner toolcache instead of
+                    fetching GitHub's version manifest over the network.
                 required: false
-                default: lts/*
+                default: '24'
                 type: string
 
             nx_cache_reset:
