@@ -139,17 +139,28 @@ jobs:
 
                   echo "::group::Detect pending changesets"
 
-                  changeset_count="$(
-                    find .changeset -name "*.md" ! -name "README.md" 2>/dev/null \
-                      | wc -l \
-                      | tr -d ' '
-                  )"
+                  # A repo without a .changeset directory (freshly bootstrapped)
+                  # must read as "0 pending changesets", not crash: under
+                  # `set -euo pipefail`, a bare `find .changeset` on a missing
+                  # directory exits 1 and kills the job.
+                  changeset_count=0
+                  changeset_slug_values=()
 
-                  mapfile -t changeset_slug_values < <(
-                    find .changeset -maxdepth 1 -type f -name '*.md' ! -name 'README.md' -printf '%f\n' 2>/dev/null \
-                      | sed 's/\.md$//' \
-                      | LC_ALL=C sort
-                  )
+                  if [ -d .changeset ]; then
+                    changeset_count="$(
+                      find .changeset -name "*.md" ! -name "README.md" \
+                        | wc -l \
+                        | tr -d ' '
+                    )"
+
+                    mapfile -t changeset_slug_values < <(
+                      find .changeset -maxdepth 1 -type f -name '*.md' ! -name 'README.md' -printf '%f\n' \
+                        | sed 's/\.md$//' \
+                        | LC_ALL=C sort
+                    )
+                  else
+                    echo "No .changeset directory found; treating as zero pending changesets."
+                  fi
 
                   changeset_slugs=""
                   primary_changeset_slug=""

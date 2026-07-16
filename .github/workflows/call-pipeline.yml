@@ -228,23 +228,23 @@ jobs:
             - name: 🩺 Report Environment
               if: ${{ always() }}
               continue-on-error: ${{ inputs.mode == 'report' }}
-              uses: ./.github/actions/report-environment
+              uses: gbtunney/snailicid3-actions/.github/actions/report-environment@main
 
             - name: 🗂️ Report Repository
               id: repo_report
               if: ${{ always() }}
               continue-on-error: ${{ inputs.mode == 'report' }}
-              uses: ./.github/actions/report-repository
+              uses: gbtunney/snailicid3-actions/.github/actions/report-repository@main
 
             - name: ✨ Report Prettier
               if: ${{ always() }}
               continue-on-error: ${{ inputs.mode == 'report' }}
-              uses: ./.github/actions/report-prettier
+              uses: gbtunney/snailicid3-actions/.github/actions/report-prettier@main
 
             - name: 📦 Report Workspace
               if: ${{ always() }}
               continue-on-error: ${{ inputs.mode == 'report' }}
-              uses: ./.github/actions/report-workspace
+              uses: gbtunney/snailicid3-actions/.github/actions/report-workspace@main
 
             - name: 🧱 Nx Report
               if: ${{ always() }}
@@ -376,7 +376,7 @@ jobs:
             - name: 🗂️ Repository Status
               id: repository_status
               if: ${{ always() }}
-              uses: ./.github/actions/report-repository
+              uses: gbtunney/snailicid3-actions/.github/actions/report-repository@main
 
             - name: 📝 Output Summary
               if: ${{ always() }}
