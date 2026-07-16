@@ -1,0 +1,24 @@
+# ─────────────────────────────────────────────────────────────
+# CALLER TEMPLATE — copy this file into <your-repo>/.github/workflows/
+# Source of truth: gbtunney/snailicid3-actions/templates/workflows/
+# These are thin triggers; all logic lives in the reusable call-* workflows.
+# ─────────────────────────────────────────────────────────────
+# Use this for compatibility checks without blocking normal work
+name: Dispatch Smoke Matrix 💨
+on:
+    workflow_dispatch:
+
+jobs:
+    smoke:
+        name: node-${{ matrix.node }}
+        strategy:
+            fail-fast: false
+            matrix:
+                node:
+                    - 20
+                    - 22
+                    - 24
+
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+        with:
+            node_version: ${{ matrix.node }}

@@ -54,6 +54,27 @@ Callers must install dependencies before using actions that invoke `snail-sh`:
 
 The `snail-sh` CLI ships as part of `@snailicid3/config` (the `bin/` directory is published to npm). Any project with `@snailicid3/config` in its dependencies will have it available via `pnpm exec snail-sh`.
 
+### Caller workflow templates
+
+GitHub can only share `workflow_call` workflows across repositories — the thin
+trigger workflows (`dispatch-*`, `pr-checks`, `push-main`, `push-release`) must
+physically exist in every repo. The canonical copies live in
+[`templates/workflows/`](templates/workflows/): to onboard or update a repo,
+copy them into `<your-repo>/.github/workflows/` verbatim.
+
+```sh
+cp path/to/snailicid3-actions/templates/workflows/*.yml .github/workflows/
+```
+
+They contain no repo-specific values. Per-repo behavior is controlled without
+editing the files:
+
+- **Repository variable `ENABLE_CHROMATIC=true`** turns on the Chromatic step
+  in `pr-checks` and `push-main` (see below).
+- **Repository variable `DISABLE_NX_CLOUD`** controls the Nx Cloud policy.
+- **Repository secrets** (`CHROMATIC_PROJECT_TOKEN`, `NPM_TOKEN`, `GH_PAT`)
+  flow through `secrets: inherit`.
+
 ### Chromatic
 
 `call-pipeline.yml` can run Chromatic visual tests. It executes

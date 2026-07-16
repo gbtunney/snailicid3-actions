@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────
+# CALLER TEMPLATE — copy this file into <your-repo>/.github/workflows/
+# Source of truth: gbtunney/snailicid3-actions/templates/workflows/
+# These are thin triggers; all logic lives in the reusable call-* workflows.
+# ─────────────────────────────────────────────────────────────
+# Runs on every push to `main`. This answers: "is main busted after merge?"
+name: Push Main
+on:
+    push:
+        branches:
+            - main
+
+concurrency:
+    group: push-main-${{ github.ref }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+env:
+    HUSKY: 0
+
+jobs:
+    required:
+        name: required
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+        secrets: inherit
+        with:
+            run_chromatic: ${{ vars.ENABLE_CHROMATIC == 'true' }}
+            mode: abort_on_error
+            check_mode: check
+            require_lockfile: true
+            require_clean_repo: true
+            run_build: true
+            run_test: true
+            run_docs_build: false
+            pnpm_cache: true
