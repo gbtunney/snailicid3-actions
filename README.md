@@ -54,6 +54,35 @@ Callers must install dependencies before using actions that invoke `snail-sh`:
 
 The `snail-sh` CLI ships as part of `@snailicid3/config` (the `bin/` directory is published to npm). Any project with `@snailicid3/config` in its dependencies will have it available via `pnpm exec snail-sh`.
 
+### Chromatic
+
+`call-pipeline.yml` can run Chromatic visual tests. It executes
+`pnpm exec nx run-many -t chromatic`, which runs each project's `chromatic`
+package.json script (Nx infers scripts as targets); projects without one are
+skipped, so it is safe to enable repo-wide.
+
+Requirements in the calling repository:
+
+1. A `chromatic` script in each Storybook project's package.json that reads
+   `$CHROMATIC_PROJECT_TOKEN` (see `@gbt/template-example-react`).
+2. The `CHROMATIC_PROJECT_TOKEN` repository secret (from the Chromatic project
+   settings page).
+3. Pass the flag and the secret when calling the pipeline:
+
+```yaml
+jobs:
+  pipeline:
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+    secrets: inherit
+    with:
+      run_build: true
+      run_test: true
+      run_chromatic: true
+```
+
+Repositories that don't need Chromatic (e.g. snailicid3) simply leave
+`run_chromatic` unset — it defaults to false.
+
 ## Commit message convention
 
 Every commit these workflows create (and every PR title they generate) is derived
