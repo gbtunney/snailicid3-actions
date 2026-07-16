@@ -1,0 +1,149 @@
+name: Test Actions
+
+# SOURCE: gbtunney/snailicid3-actions
+#
+# Self-test for this repository. Runs the composite actions and reusable
+# workflows against the fixture workspace (package.json at the repo root,
+# which depends on the published @snailicid3/config so snail-sh, scope-commit,
+# and scope-affected are available via `pnpm exec`).
+#
+# Composite actions are referenced here with local `./` paths on purpose:
+# this workflow checks out this repository itself, so local refs exercise the
+# code on the branch under test. (Consumers never see local refs — the
+# reusable call-* workflows reference the actions fully qualified, because a
+# local path inside a reusable workflow resolves against the caller's
+# checkout.)
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+env:
+    HUSKY: 0
+
+jobs:
+    composite_actions:
+        name: composite actions
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+
+            - name: Setup Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: lts/*
+                  cache: pnpm
+
+            - name: Install fixture dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Report Environment
+              uses: ./.github/actions/report-environment
+
+            - name: Report Repository
+              uses: ./.github/actions/report-repository
+
+            - name: Report Prettier
+              uses: ./.github/actions/report-prettier
+
+            - name: Report Workspace
+              uses: ./.github/actions/report-workspace
+
+            - name: Require Up To Date (changeset-gated mode)
+              uses: ./.github/actions/require-up-to-date
+              with:
+                  base-branch: main
+                  require-changeset: 'true'
+
+            - name: Assert scope-commit derives conventional messages
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  message="$(SCOPE_COMMIT_SKIP_COMMITLINT=1 pnpm exec scope-commit --all --message chore "self test")"
+                  echo "Derived message: $message"
+
+                  if [[ ! "$message" =~ ^chore(\([a-z0-9,._-]+\))?:\ self\ test$ ]]; then
+                    echo "::error::scope-commit produced an unexpected message: $message"
+                    exit 1
+                  fi
+
+    detect_release_state:
+        name: detect release state
+        uses: ./.github/workflows/call-detect-release-state.yml
+
+    assert_detect_outputs:
+        name: assert detector outputs
+        needs: detect_release_state
+        runs-on: ubuntu-latest
+        steps:
+            - name: Fixture repo must resolve to should_skip
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  echo "should_version=${{ needs.detect_release_state.outputs.should_version }}"
+                  echo "should_publish=${{ needs.detect_release_state.outputs.should_publish }}"
+                  echo "should_skip=${{ needs.detect_release_state.outputs.should_skip }}"
+
+                  if [[ "${{ needs.detect_release_state.outputs.should_skip }}" != "true" ]]; then
+                    echo "::error::Expected should_skip=true for the fixture repo (private package, no changesets)."
+                    exit 1
+                  fi
+
+    make_test_artifact:
+        name: make test artifact
+        runs-on: ubuntu-latest
+        steps:
+            - name: Create workspace artifact archive
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  mkdir -p "$RUNNER_TEMP/payload"
+                  echo "self-test marker $(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$RUNNER_TEMP/payload/SELF_TEST_MARKER.txt"
+                  tar -czf "$RUNNER_TEMP/workspace-artifact.tar.gz" -C "$RUNNER_TEMP/payload" .
+
+            - name: Upload workspace artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: self-test-workspace
+                  path: ${{ runner.temp }}/workspace-artifact.tar.gz
+
+    apply_workspace_artifact:
+        name: apply workspace artifact
+        needs: make_test_artifact
+        uses: ./.github/workflows/call-apply-workspace-artifact.yml
+        with:
+            artifact_name: self-test-workspace
+            commit_mode: skip
+            install_dependencies: true
+
+    assert_apply_outputs:
+        name: assert apply outputs
+        needs: apply_workspace_artifact
+        runs-on: ubuntu-latest
+        steps:
+            - name: Overlay must report a dirty workspace
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  echo "is_dirty=${{ needs.apply_workspace_artifact.outputs.is_dirty }}"
+
+                  if [[ "${{ needs.apply_workspace_artifact.outputs.is_dirty }}" != "true" ]]; then
+                    echo "::error::Expected the overlaid marker file to leave the workspace dirty."
+                    exit 1
+                  fi
