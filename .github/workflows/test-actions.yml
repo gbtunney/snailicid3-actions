@@ -125,6 +125,12 @@ jobs:
     apply_workspace_artifact:
         name: apply workspace artifact
         needs: make_test_artifact
+        # A caller must grant at least the permissions the called workflow
+        # declares, or the whole run dies at startup ("startup_failure").
+        permissions:
+            contents: write
+            actions: read
+            id-token: write
         uses: ./.github/workflows/call-apply-workspace-artifact.yml
         with:
             artifact_name: self-test-workspace
