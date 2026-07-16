@@ -69,7 +69,8 @@ cp path/to/snailicid3-actions/templates/workflows/*.yml .github/workflows/
 To stamp all local clones at once, use the sync script:
 
 ```sh
-bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-monorepov2 ../gbt-schema-form
+bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
+bin/sync-callers.sh --chromatic ../gbt-monorepov2
 ```
 
 **Planned (not yet built): auto-PR sync.** Once the template set stabilizes, a
@@ -81,14 +82,15 @@ in that repo. It needs the `GH_PAT` secret with `workflow` scope — the default
 `GITHUB_TOKEN` cannot push workflow files to other repositories. Deferred
 deliberately until the migration dust settles.
 
-They contain no repo-specific values. Per-repo behavior is controlled without
-editing the files:
-
-- **Repository variable `ENABLE_CHROMATIC=true`** turns on the Chromatic step
-  in `pr-checks` and `push-main` (see below).
-- **Repository variable `DISABLE_NX_CLOUD`** controls the Nx Cloud policy.
-- **Repository secrets** (`CHROMATIC_PROJECT_TOKEN`, `NPM_TOKEN`, `GH_PAT`)
-  flow through `secrets: inherit`.
+Behavior is controlled by explicit workflow inputs, following the repo
+pattern: every `call-*` input has a matching `dispatch-*` input for manual
+runs, and the triggered callers (`pr-checks`, `push-*`) pass the same inputs
+with values written in the file. The only repo-specific line is
+`run_chromatic:` in `pr-checks`/`push-main` — `bin/sync-callers.sh --chromatic`
+sets it to `true` during sync for repos that use Chromatic. Secrets
+(`CHROMATIC_PROJECT_TOKEN`, `NPM_TOKEN`, `GH_PAT`) flow through
+`secrets: inherit`; the `DISABLE_NX_CLOUD` repository variable remains the one
+vars-based switch (pre-existing Nx Cloud policy).
 
 ### Chromatic
 
@@ -102,7 +104,7 @@ Requirements in the calling repository:
 1. A `chromatic` script in each Storybook project's package.json that reads
    `$CHROMATIC_PROJECT_TOKEN` (see `@gbt/template-example-react`).
 2. The `CHROMATIC_PROJECT_TOKEN` repository secret (from the Chromatic project
-   settings page).
+   settings page) — the only secret Chromatic needs.
 3. Pass the flag and the secret when calling the pipeline:
 
 ```yaml
@@ -116,8 +118,11 @@ jobs:
       run_chromatic: true
 ```
 
-Repositories that don't need Chromatic (e.g. snailicid3) simply leave
-`run_chromatic` unset — it defaults to false.
+Repositories that don't need Chromatic (e.g. snailicid3) keep
+`run_chromatic: false` in their callers (the template default). Manual runs:
+`dispatch-pipeline` exposes `run_chromatic` as a checkbox, so Chromatic can be
+triggered and tested by hand in any repo with the secret set, independent of
+what the triggered callers do.
 
 ## Commit message convention
 

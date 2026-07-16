@@ -7,11 +7,15 @@ set -euo pipefail
 # templates/workflows/ with the template header swapped for a synced marker.
 #
 # Usage:
-#   bin/sync-callers.sh <path-to-consumer-repo> [<path> ...]
+#   bin/sync-callers.sh [--chromatic] <path-to-consumer-repo> [<path> ...]
+#
+# --chromatic flips run_chromatic to true in the synced pr-checks and
+# push-main callers, for repos whose projects have a chromatic script
+# (requires the CHROMATIC_PROJECT_TOKEN repository secret).
 #
 # Example (all repos cloned side by side):
-#   bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate \
-#     ../gbt-monorepov2 ../gbt-schema-form
+#   bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
+#   bin/sync-callers.sh --chromatic ../gbt-monorepov2
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/../templates/workflows"
@@ -21,8 +25,14 @@ TEMPLATE_DIR="$SCRIPT_DIR/../templates/workflows"
     exit 1
 }
 
+ENABLE_CHROMATIC=false
+if [[ "${1:-}" == "--chromatic" ]]; then
+    ENABLE_CHROMATIC=true
+    shift
+fi
+
 [[ $# -ge 1 ]] || {
-    echo "usage: bin/sync-callers.sh <path-to-consumer-repo> [<path> ...]" >&2
+    echo "usage: bin/sync-callers.sh [--chromatic] <path-to-consumer-repo> [<path> ...]" >&2
     exit 1
 }
 
@@ -47,6 +57,11 @@ for repo in "$@"; do
             # Drop the template's own header block (first comment ruler pair).
             awk 'BEGIN{skip=1} skip && /^# ─/{count++; if(count==2){skip=0}; next} skip && /^#/{next} {print}' "$template"
         } > "$target/$name"
+
+        if [[ "$ENABLE_CHROMATIC" == "true" && ( "$name" == "pr-checks.yml" || "$name" == "push-main.yml" ) ]]; then
+            sed -i.bak 's/run_chromatic: false/run_chromatic: true/' "$target/$name"
+            rm -f "$target/$name.bak"
+        fi
 
         echo "synced $name -> $target"
     done
