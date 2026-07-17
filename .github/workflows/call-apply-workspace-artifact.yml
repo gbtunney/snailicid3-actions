@@ -244,7 +244,13 @@ jobs:
               env:
                   GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-              run: ${{ inputs.post_overlay_command }}
+              # Tokens pasted into secrets with a trailing newline break gh
+              # ("invalid header field value for Authorization") and npm auth;
+              # strip whitespace before handing control to the caller command.
+              run: |
+                  GH_TOKEN="${GH_TOKEN//[$' \t\r\n']/}"; export GH_TOKEN
+                  NODE_AUTH_TOKEN="${NODE_AUTH_TOKEN//[$' \t\r\n']/}"; export NODE_AUTH_TOKEN
+                  ${{ inputs.post_overlay_command }}
 
             - name: Summary
               if: ${{ always() }}
