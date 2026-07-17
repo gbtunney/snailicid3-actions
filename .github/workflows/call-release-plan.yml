@@ -396,6 +396,12 @@ jobs:
               run: |
                   set -euo pipefail
 
+                  # A secret pasted with a trailing newline makes gh fail with
+                  # "invalid header field value for Authorization" — strip all
+                  # whitespace from the token defensively.
+                  GH_TOKEN="${GH_TOKEN//[$' \t\r\n']/}"
+                  export GH_TOKEN
+
                   title="${{ steps.version_msg.outputs.message }}"
                   if [[ -z "$title" ]]; then
                     title="release(root): version packages"
