@@ -7,9 +7,8 @@ name: Test Actions
 # which depends on the published @snailicid3/config so snail-sh, scope-commit,
 # and scope-affected are available via `pnpm exec`).
 #
-# Composite actions and reusable workflows use `$/` so they resolve from the
-# same repository commit as this workflow, including the PR merge commit during
-# pull request self-tests.
+# Same-repository actions/workflows resolve from the current workflow commit.
+# Composite actions use `$/`; reusable workflow calls may use `$/` or `./`.
 
 on:
     pull_request:
@@ -150,3 +149,14 @@ jobs:
                     echo "::error::Expected the overlaid marker file to leave the workspace dirty."
                     exit 1
                   fi
+    release_plan:
+        name: release plan
+        permissions:
+            contents: write
+            actions: write
+            id-token: write
+            pull-requests: write
+        uses: ./.github/workflows/call-release-plan.yml
+        with:
+            dry_run: true
+            run_pipeline: false
