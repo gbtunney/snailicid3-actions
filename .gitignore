@@ -120,7 +120,7 @@ types/
 yarn.lock
 
 # NPM lockfile
-package.lock
+package-lock.json
 npm-shrinkwrap.json
 
 # VSCode History
