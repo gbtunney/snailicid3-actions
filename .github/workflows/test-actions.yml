@@ -7,12 +7,9 @@ name: Test Actions
 # which depends on the published @snailicid3/config so snail-sh, scope-commit,
 # and scope-affected are available via `pnpm exec`).
 #
-# Composite actions are referenced here with local `./` paths on purpose:
-# this workflow checks out this repository itself, so local refs exercise the
-# code on the branch under test. (Consumers never see local refs — the
-# reusable call-* workflows reference the actions fully qualified, because a
-# local path inside a reusable workflow resolves against the caller's
-# checkout.)
+# Composite actions and reusable workflows use `$/` so they resolve from the
+# same repository commit as this workflow, including the PR merge commit during
+# pull request self-tests.
 
 on:
     pull_request:

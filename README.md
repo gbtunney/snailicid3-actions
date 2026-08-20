@@ -168,6 +168,6 @@ workspace (the root `package.json`, which depends on the published
   asserting dirty-state detection),
 - `scope-commit` message derivation.
 
-Note: because the `call-*` workflows reference composite actions at `@v1`,
-changes to an action are only picked up by the reusable workflows after merge —
-the self-test's local refs cover them pre-merge.
+> Note: the `call-*` workflows reference composite actions with `$/`, so each
+composite action resolves from the same repository commit as the reusable
+workflow that invoked it. This keeps tagged workflow releases self-contained.
