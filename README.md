@@ -11,20 +11,20 @@ Reference these from any repository:
 ```yaml
 jobs:
   pipeline:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
     with:
       run_build: true
       run_test: true
 
   detect:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@main
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@v1
 
   release:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@main
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
     secrets: inherit
 
   apply:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-apply-workspace-artifact.yml@main
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-apply-workspace-artifact.yml@v1
     with:
       artifact_name: my-artifact
 ```
@@ -33,11 +33,11 @@ jobs:
 
 ```yaml
 steps:
-  - uses: gbtunney/snailicid3-actions/.github/actions/report-repository@main
-  - uses: gbtunney/snailicid3-actions/.github/actions/report-environment@main
-  - uses: gbtunney/snailicid3-actions/.github/actions/report-prettier@main
-  - uses: gbtunney/snailicid3-actions/.github/actions/report-workspace@main
-  - uses: gbtunney/snailicid3-actions/.github/actions/require-up-to-date@main
+  - uses: gbtunney/snailicid3-actions/.github/actions/report-repository@v1
+  - uses: gbtunney/snailicid3-actions/.github/actions/report-environment@v1
+  - uses: gbtunney/snailicid3-actions/.github/actions/report-prettier@v1
+  - uses: gbtunney/snailicid3-actions/.github/actions/report-workspace@v1
+  - uses: gbtunney/snailicid3-actions/.github/actions/require-up-to-date@v1
 ```
 
 ### Requirements
@@ -110,7 +110,7 @@ Requirements in the calling repository:
 ```yaml
 jobs:
   pipeline:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
     secrets: inherit
     with:
       run_build: true
@@ -150,7 +150,7 @@ pnpm exec scope-commit --staged --message <type> "<subject>"
 - Composite actions could live anywhere in the repo, but they are kept under
   `.github/actions/` next to their scripts in `.github/scripts/`.
 - Inside the reusable `call-*` workflows, composite actions are referenced
-  **fully qualified** (`gbtunney/snailicid3-actions/.github/actions/<name>@main`).
+  **fully qualified** (`gbtunney/snailicid3-actions/.github/actions/<name>@v1`).
   A local `./.github/actions/...` reference inside a reusable workflow resolves
   against the *caller's* checkout and breaks every cross-repo consumer.
 
@@ -168,6 +168,6 @@ workspace (the root `package.json`, which depends on the published
   asserting dirty-state detection),
 - `scope-commit` message derivation.
 
-Note: because the `call-*` workflows reference composite actions at `@main`,
-changes to an action are only picked up by the reusable workflows after merge —
-the self-test's local refs cover them pre-merge.
+> Note: the `call-*` workflows reference composite actions with `$/`, so each
+composite action resolves from the same repository commit as the reusable
+workflow that invoked it. This keeps tagged workflow releases self-contained.

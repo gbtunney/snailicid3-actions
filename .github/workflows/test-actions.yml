@@ -7,12 +7,9 @@ name: Test Actions
 # which depends on the published @snailicid3/config so snail-sh, scope-commit,
 # and scope-affected are available via `pnpm exec`).
 #
-# Composite actions are referenced here with local `./` paths on purpose:
-# this workflow checks out this repository itself, so local refs exercise the
-# code on the branch under test. (Consumers never see local refs — the
-# reusable call-* workflows reference the actions fully qualified, because a
-# local path inside a reusable workflow resolves against the caller's
-# checkout.)
+# Composite actions and reusable workflows use `$/` so they resolve from the
+# same repository commit as this workflow, including the PR merge commit during
+# pull request self-tests.
 
 on:
     pull_request:
@@ -51,19 +48,19 @@ jobs:
               run: pnpm install --frozen-lockfile
 
             - name: Report Environment
-              uses: ./.github/actions/report-environment
+              uses: $/.github/actions/report-environment
 
             - name: Report Repository
-              uses: ./.github/actions/report-repository
+              uses: $/.github/actions/report-repository
 
             - name: Report Prettier
-              uses: ./.github/actions/report-prettier
+              uses: $/.github/actions/report-prettier
 
             - name: Report Workspace
-              uses: ./.github/actions/report-workspace
+              uses: $/.github/actions/report-workspace
 
             - name: Require Up To Date (changeset-gated mode)
-              uses: ./.github/actions/require-up-to-date
+              uses: $/.github/actions/require-up-to-date
               with:
                   base-branch: main
                   require-changeset: 'true'
@@ -83,7 +80,7 @@ jobs:
 
     detect_release_state:
         name: detect release state
-        uses: ./.github/workflows/call-detect-release-state.yml
+        uses: $/.github/workflows/call-detect-release-state.yml
 
     assert_detect_outputs:
         name: assert detector outputs
@@ -131,7 +128,7 @@ jobs:
             contents: write
             actions: read
             id-token: write
-        uses: ./.github/workflows/call-apply-workspace-artifact.yml
+        uses: $/.github/workflows/call-apply-workspace-artifact.yml
         with:
             artifact_name: self-test-workspace
             commit_mode: skip
