@@ -130,7 +130,7 @@ permissions:
 jobs:
     detect:
         name: detect release state
-        uses: ./.github/workflows/call-detect-release-state.yml
+        uses: $/.github/workflows/call-detect-release-state.yml
         with:
             ref: ${{ inputs.ref }}
 
@@ -436,7 +436,7 @@ jobs:
         name: pending release candidate pipeline
         needs: [detect, plan, guard_real_release]
         if: ${{ always() && inputs.run_pipeline == true && needs.detect.outputs.should_publish == 'true' && (inputs.dry_run == true || needs.guard_real_release.result == 'success') }}
-        uses: ./.github/workflows/call-pipeline.yml
+        uses: $/.github/workflows/call-pipeline.yml
         with:
             mode: abort_on_error
             check_mode: check
@@ -482,7 +482,7 @@ jobs:
         name: pending release publish
         needs: [detect, plan, guard_real_release, pending_release_pipeline]
         if: ${{ always() && inputs.dry_run == false && needs.guard_real_release.result == 'success' && needs.detect.outputs.should_publish == 'true' && needs.pending_release_pipeline.result == 'success' && needs.pending_release_pipeline.outputs.artifact_uploaded == 'true' }}
-        uses: ./.github/workflows/call-apply-workspace-artifact.yml
+        uses: $/.github/workflows/call-apply-workspace-artifact.yml
         secrets: inherit
         with:
             ref: ${{ inputs.ref || github.sha }}

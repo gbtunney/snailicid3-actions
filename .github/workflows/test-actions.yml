@@ -51,19 +51,19 @@ jobs:
               run: pnpm install --frozen-lockfile
 
             - name: Report Environment
-              uses: ./.github/actions/report-environment
+              uses: $/.github/actions/report-environment
 
             - name: Report Repository
-              uses: ./.github/actions/report-repository
+              uses: $/.github/actions/report-repository
 
             - name: Report Prettier
-              uses: ./.github/actions/report-prettier
+              uses: $/.github/actions/report-prettier
 
             - name: Report Workspace
-              uses: ./.github/actions/report-workspace
+              uses: $/.github/actions/report-workspace
 
             - name: Require Up To Date (changeset-gated mode)
-              uses: ./.github/actions/require-up-to-date
+              uses: $/.github/actions/require-up-to-date
               with:
                   base-branch: main
                   require-changeset: 'true'
@@ -83,7 +83,7 @@ jobs:
 
     detect_release_state:
         name: detect release state
-        uses: ./.github/workflows/call-detect-release-state.yml
+        uses: $/.github/workflows/call-detect-release-state.yml
 
     assert_detect_outputs:
         name: assert detector outputs
@@ -131,7 +131,7 @@ jobs:
             contents: write
             actions: read
             id-token: write
-        uses: ./.github/workflows/call-apply-workspace-artifact.yml
+        uses: $/.github/workflows/call-apply-workspace-artifact.yml
         with:
             artifact_name: self-test-workspace
             commit_mode: skip
