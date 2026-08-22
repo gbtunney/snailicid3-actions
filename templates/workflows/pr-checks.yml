@@ -56,7 +56,7 @@ jobs:
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
             mode: abort_on_error
             check_mode: check
-            require_lockfile: true
+            lockfile_mode: frozen
             require_clean_repo: true
             run_build: true
             run_test: true
@@ -73,7 +73,7 @@ jobs:
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
             mode: abort_on_error
             check_mode: check
-            require_lockfile: true
+            lockfile_mode: frozen
             require_clean_repo: true
             run_build: true
             run_test: true
@@ -90,7 +90,7 @@ jobs:
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
             mode: abort_on_error
             check_mode: check
-            require_lockfile: true
+            lockfile_mode: frozen
             require_clean_repo: true
             run_build: true
             run_test: true

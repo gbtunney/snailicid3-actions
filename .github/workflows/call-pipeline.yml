@@ -41,10 +41,16 @@ on:
                 default: skip
                 type: string
 
-            require_lockfile:
+            lockfile_mode:
+                description: >
+                    How the install treats pnpm-lock.yaml. frozen installs exactly what the lockfile
+                    says and fails when it no longer satisfies the manifests — validation never
+                    rewrites it. reconcile runs a non-frozen install, which updates the lockfile to
+                    satisfy the manifests; that is a repair, not a reset, and it re-resolves nothing
+                    that is already pinned.
                 required: false
-                default: false
-                type: boolean
+                default: frozen
+                type: string
 
             run_build:
                 required: false
@@ -204,7 +210,7 @@ jobs:
                     echo "- mode: \`${{ inputs.mode }}\`"
                     echo "- check_mode: \`${{ inputs.check_mode }}\`"
                     echo "- api_report_mode: \`${{ inputs.api_report_mode }}\`"
-                    echo "- require_lockfile: \`${{ inputs.require_lockfile }}\`"
+                    echo "- lockfile_mode: \`${{ inputs.lockfile_mode }}\`"
                     echo "- require_clean_repo: \`${{ inputs.require_clean_repo }}\`"
                     echo "- run_build: \`${{ inputs.run_build }}\`"
                     echo "- run_test: \`${{ inputs.run_test }}\`"
@@ -215,21 +221,71 @@ jobs:
                     echo "- nx_targets: \`${{ inputs.nx_targets }}\`"
                   } | tee -a "$GITHUB_STEP_SUMMARY"
 
-            - name: 📦 Install Frozen Lockfile
-              id: install_frozen
-              continue-on-error: true
-              run: pnpm install --frozen-lockfile
-
-            - name: 📦 Install Relaxed Lockfile (fallback)
-              id: install_relaxed
-              if: ${{ steps.install_frozen.outcome == 'failure' && !inputs.require_lockfile }}
-              run: pnpm install --no-frozen-lockfile
-
-            - name: 🚨 Validate Install
-              if: ${{ steps.install_frozen.outcome == 'failure' && (inputs.require_lockfile || steps.install_relaxed.outcome == 'failure') }}
+            - name: 🚦 Validate lockfile mode
+              shell: bash
               run: |
-                  echo "Install failed."
+                  set -euo pipefail
+                  case "${{ inputs.lockfile_mode }}" in
+                    frozen|reconcile) ;;
+                    *) echo "::error::Invalid lockfile_mode: ${{ inputs.lockfile_mode }}. Expected frozen or reconcile."; exit 1 ;;
+                  esac
+
+            - name: 🔒 Record lockfile fingerprint
+              id: lockfile_before
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [[ -f pnpm-lock.yaml ]]; then
+                    echo "sha=$(shasum -a 256 pnpm-lock.yaml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "sha=absent" >> "$GITHUB_OUTPUT"
+                  fi
+
+            # No fallback. A frozen install that fails used to silently retry
+            # unfrozen, which rewrote pnpm-lock.yaml as a side effect of
+            # ordinary validation — the caller never asked for that and the run
+            # never said it happened.
+            - name: 📦 Install (frozen lockfile)
+              if: ${{ inputs.lockfile_mode == 'frozen' }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  if pnpm install --frozen-lockfile; then
+                    exit 0
+                  fi
+
+                  echo "::error::pnpm install --frozen-lockfile failed: pnpm-lock.yaml no longer satisfies the manifests. Validation does not rewrite the lockfile. To reconcile it deliberately, run Workspace Update with repair_lockfile enabled, or call this workflow with lockfile_mode: reconcile."
                   exit 1
+
+            - name: 📦 Install (reconcile lockfile)
+              if: ${{ inputs.lockfile_mode == 'reconcile' }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  echo "lockfile_mode=reconcile: pnpm-lock.yaml may be updated to satisfy the manifests."
+                  pnpm install --no-frozen-lockfile
+
+            - name: 🔒 Report lockfile change
+              id: lockfile_after
+              if: ${{ always() }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  before="${{ steps.lockfile_before.outputs.sha }}"
+                  after="absent"
+                  if [[ -f pnpm-lock.yaml ]]; then
+                    after="$(shasum -a 256 pnpm-lock.yaml | cut -d' ' -f1)"
+                  fi
+
+                  if [[ "$before" == "$after" ]]; then
+                    echo "lockfile_changed=false" >> "$GITHUB_OUTPUT"
+                    echo "pnpm-lock.yaml is unchanged."
+                  else
+                    echo "lockfile_changed=true" >> "$GITHUB_OUTPUT"
+                    echo "pnpm-lock.yaml was updated by the ${{ inputs.lockfile_mode }} install."
+                  fi
 
             - uses: nrwl/nx-set-shas@v5
               if: ${{ inputs.use_nx_affected }}
@@ -407,6 +463,8 @@ jobs:
                     echo "## Outputs"
                     echo ""
                     echo "- is_repo_dirty: \`${{ steps.repo_dirty.outputs.is_repo_dirty }}\`"
+                    echo "- lockfile_mode: \`${{ inputs.lockfile_mode }}\`"
+                    echo "- lockfile_changed: \`${{ steps.lockfile_after.outputs.lockfile_changed }}\`"
                     echo "- artifact_uploaded: \`${{ steps.artifact_uploaded.outputs.artifact_uploaded }}\`"
                     echo "- workspace_artifact_name: \`${{ steps.artifact_name.outputs.name }}\`"
                   } >> "$GITHUB_STEP_SUMMARY"

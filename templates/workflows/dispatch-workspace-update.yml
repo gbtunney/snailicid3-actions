@@ -26,6 +26,16 @@ on:
                 default: false
                 type: boolean
 
+            repair_lockfile:
+                description: >
+                    Reconcile pnpm-lock.yaml with the manifests (pnpm install --no-frozen-lockfile)
+                    and commit the result. This repairs a stale lockfile; it does not reset or
+                    re-resolve one, and it does not upgrade anything already pinned. Leave off and
+                    a stale lockfile fails the run instead of being rewritten silently.
+                required: true
+                default: false
+                type: boolean
+
             commit_message_type:
                 description: Conventional commit type prefix
                 required: false
@@ -64,12 +74,21 @@ jobs:
 
                   if [[ "${{ inputs.run_fix }}" != "true" &&
                         "${{ inputs.run_docs }}" != "true" &&
-                        "${{ inputs.run_api_report }}" != "true" ]]; then
-                    echo "::error::Select at least one routine: fix, docs, or API report."
+                        "${{ inputs.run_api_report }}" != "true" &&
+                        "${{ inputs.repair_lockfile }}" != "true" ]]; then
+                    echo "::error::Select at least one routine: fix, docs, API report, or lockfile repair."
                     exit 1
                   fi
 
-                  echo "Branch: ${{ github.ref_name }}"
+                  {
+                    echo "## 🧰 Workspace update"
+                    echo ""
+                    echo "- branch: \`${{ github.ref_name }}\`"
+                    echo "- fix: \`${{ inputs.run_fix }}\`"
+                    echo "- docs: \`${{ inputs.run_docs }}\`"
+                    echo "- api report: \`${{ inputs.run_api_report }}\`"
+                    echo "- lockfile: \`${{ inputs.repair_lockfile && 'reconcile (repair, not reset)' || 'frozen (a stale lockfile fails the run)' }}\`"
+                  } | tee -a "$GITHUB_STEP_SUMMARY"
 
     pipeline_workspace_update:
         name: Run selected pipeline routines
@@ -79,7 +98,7 @@ jobs:
         with:
             mode: report
             check_mode: ${{ inputs.run_fix && 'fix' || 'skip' }}
-            require_lockfile: false
+            lockfile_mode: ${{ inputs.repair_lockfile && 'reconcile' || 'frozen' }}
             run_build: false
             run_test: false
             run_docs_build: ${{ inputs.run_docs }}

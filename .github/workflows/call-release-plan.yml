@@ -83,11 +83,14 @@ on:
                 default: true
                 type: boolean
 
-            require_lockfile:
-                description: Treat frozen lockfile install as required when running the validation pipeline.
+            lockfile_mode:
+                description: >
+                    How the install treats pnpm-lock.yaml. frozen fails when the lockfile no longer
+                    satisfies the manifests; reconcile updates it to satisfy them (a repair, not a
+                    reset).
                 required: false
-                default: true
-                type: boolean
+                default: frozen
+                type: string
 
             node_version:
                 description: Node version to run the validation pipeline with. Prefer a concrete major (e.g. '24')
@@ -345,10 +348,10 @@ jobs:
               run: |
                   set -euo pipefail
 
-                  if [[ "${{ inputs.require_lockfile }}" == "true" ]]; then
-                    pnpm install --frozen-lockfile
-                  else
+                  if [[ "${{ inputs.lockfile_mode }}" == "reconcile" ]]; then
                     pnpm install --no-frozen-lockfile
+                  else
+                    pnpm install --frozen-lockfile
                   fi
 
             - name: Version packages
@@ -452,7 +455,7 @@ jobs:
         with:
             mode: abort_on_error
             check_mode: check
-            require_lockfile: ${{ inputs.require_lockfile }}
+            lockfile_mode: ${{ inputs.lockfile_mode }}
             require_clean_repo: true
             run_build: true
             run_test: true
@@ -507,7 +510,7 @@ jobs:
             artifact_name: ${{ needs.pending_release_pipeline.outputs.workspace_artifact_name }}
             commit_mode: skip
             install_dependencies: true
-            require_lockfile: ${{ inputs.require_lockfile }}
+            lockfile_mode: ${{ inputs.lockfile_mode }}
             node_version: ${{ inputs.node_version }}
             pnpm_cache: ${{ inputs.pnpm_cache }}
             post_overlay_command: |

@@ -63,7 +63,7 @@ jobs:
             mode: report
             check_mode: skip
             api_report_mode: skip
-            require_lockfile: false
+            lockfile_mode: frozen
             require_clean_repo: false
             run_build: false
             run_test: false

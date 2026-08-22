@@ -98,6 +98,74 @@ jobs:
                   set -euo pipefail
                   pnpm check:callers --external "$RUNNER_TEMP/consumer/.github/workflows"
 
+    lockfile_policy:
+        name: lockfile policy
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+
+            # lockfile_mode rests on two pnpm behaviours. Both are asserted
+            # against a copy of the fixture, so the checkout stays clean.
+            - name: A current lockfile installs frozen
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  work="$RUNNER_TEMP/lockfile-clean"
+                  mkdir -p "$work"
+                  cp package.json pnpm-lock.yaml "$work/"
+
+                  pnpm --dir "$work" install --frozen-lockfile
+                  echo "Frozen install succeeded on the committed lockfile."
+
+            - name: A stale lockfile fails frozen and is repaired by reconcile
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  work="$RUNNER_TEMP/lockfile-stale"
+                  mkdir -p "$work"
+                  cp package.json pnpm-lock.yaml "$work/"
+
+                  # Widen a devDependency range so the lockfile no longer
+                  # matches the manifest — exactly the condition the old
+                  # relaxed-install fallback used to paper over silently.
+                  node -e '
+                      const fs = require("node:fs")
+                      const manifestPath = process.argv[1] + "/package.json"
+                      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+                      manifest.devDependencies.prettier = "^3.0.0"
+                      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 4) + "\n")
+                  ' "$work"
+
+                  before="$(shasum -a 256 "$work/pnpm-lock.yaml" | cut -d' ' -f1)"
+
+                  if pnpm --dir "$work" install --frozen-lockfile > /dev/null 2>&1; then
+                    echo "::error::A stale lockfile installed frozen — lockfile_mode: frozen would not catch drift."
+                    exit 1
+                  fi
+                  echo "Frozen install correctly refused a stale lockfile."
+
+                  pnpm --dir "$work" install --no-frozen-lockfile
+                  after="$(shasum -a 256 "$work/pnpm-lock.yaml" | cut -d' ' -f1)"
+
+                  if [[ "$before" == "$after" ]]; then
+                    echo "::error::Reconcile left pnpm-lock.yaml unchanged — the repair path does nothing."
+                    exit 1
+                  fi
+                  echo "Reconcile repaired the lockfile, which is what lockfile_mode: reconcile promises."
+
     composite_actions:
         name: composite actions
         runs-on: ubuntu-latest

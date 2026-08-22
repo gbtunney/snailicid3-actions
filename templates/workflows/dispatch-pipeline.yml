@@ -35,11 +35,14 @@ on:
                     - check
                     - skip
 
-            require_lockfile:
-                description: Treat frozen lockfile install as required
+            lockfile_mode:
+                description: pnpm-lock.yaml handling — frozen fails on a stale lockfile, reconcile repairs it
                 required: true
-                default: false
-                type: boolean
+                default: frozen
+                type: choice
+                options:
+                    - frozen
+                    - reconcile
             require_clean_repo:
                 description: Fail if repository becomes dirty
                 required: true
@@ -128,7 +131,7 @@ jobs:
             check_mode: ${{ inputs.check_mode }}
             disable_nx_cloud: ${{ inputs.disable_nx_cloud }}
             api_report_mode: ${{ inputs.api_report_mode }}
-            require_lockfile: ${{ inputs.require_lockfile }}
+            lockfile_mode: ${{ inputs.lockfile_mode }}
             require_clean_repo: ${{ inputs.require_clean_repo }}
             run_build: ${{ inputs.run_build }}
             run_test: ${{ inputs.run_test }}

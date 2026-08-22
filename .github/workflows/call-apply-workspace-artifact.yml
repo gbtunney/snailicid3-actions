@@ -83,11 +83,14 @@ on:
                 default: false
                 type: boolean
 
-            require_lockfile:
-                description: Use --frozen-lockfile when installing dependencies.
+            lockfile_mode:
+                description: >
+                    How the install treats pnpm-lock.yaml. frozen fails when the lockfile no longer
+                    satisfies the manifests; reconcile updates it to satisfy them (a repair, not a
+                    reset).
                 required: false
-                default: true
-                type: boolean
+                default: frozen
+                type: string
 
         outputs:
             is_dirty:
@@ -200,10 +203,10 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-                  if [[ "${{ inputs.require_lockfile }}" == "true" ]]; then
-                    pnpm install --frozen-lockfile
-                  else
+                  if [[ "${{ inputs.lockfile_mode }}" == "reconcile" ]]; then
                     pnpm install --no-frozen-lockfile
+                  else
+                    pnpm install --frozen-lockfile
                   fi
 
             - name: Commit changes

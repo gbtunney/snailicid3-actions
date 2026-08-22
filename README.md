@@ -148,6 +148,30 @@ template, because the token names are repository-specific. See
 [`templates/README.md`](templates/README.md) for a complete example and the
 matching package target.
 
+### Lockfiles
+
+`pnpm-lock.yaml` is only ever rewritten when a caller asks for it. Every
+workflow that installs takes `lockfile_mode`:
+
+| `lockfile_mode` | Behaviour |
+| --- | --- |
+| `frozen` (default) | `pnpm install --frozen-lockfile`. A lockfile that no longer satisfies the manifests fails the run, with an error naming the repair route. Nothing is rewritten. |
+| `reconcile` | `pnpm install --no-frozen-lockfile`. The lockfile is updated to satisfy the manifests — a repair, not a reset: nothing already pinned is re-resolved and nothing is upgraded. |
+
+This replaces an implicit fallback. The pipeline used to try a frozen install
+and, on failure, silently retry unfrozen — so ordinary PR and release
+validation could rewrite `pnpm-lock.yaml` as a side effect, with nothing in the
+run saying so. Validation now refuses instead, and the pipeline summary reports
+both the mode and whether the lockfile actually changed.
+
+To repair a stale lockfile deliberately, run **Dispatch Workspace Update** with
+`repair_lockfile` enabled: it is a selected maintenance routine like fix, docs,
+or API report, so it satisfies the guard on its own, and the reconciled
+lockfile travels in the workspace artifact and is committed with the rest.
+
+Destructive reset / fresh re-resolution is a separate concern and is not
+offered here.
+
 ## Commit message convention
 
 Every commit these workflows create (and every PR title they generate) is derived
