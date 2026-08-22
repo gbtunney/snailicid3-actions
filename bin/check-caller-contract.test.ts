@@ -59,10 +59,10 @@ jobs:
 const CHROMATIC_REUSABLE = REUSABLE.replace(
     '            GH_PAT:\n',
     [
-        '            CHROMATIC_ALPHA_PROJECT_TOKEN:',
+        '            CHROMATIC_PROJECT_TOKEN_ALPHA:',
         '                description: Token for alpha.',
         '                required: false',
-        '            CHROMATIC_BETA_PROJECT_TOKEN:',
+        '            CHROMATIC_PROJECT_TOKEN_BETA:',
         '                description: Token for beta.',
         '                required: false',
         '            GH_PAT:',
@@ -70,7 +70,7 @@ const CHROMATIC_REUSABLE = REUSABLE.replace(
     ].join('\n'),
 ).replace(
     'run: echo "${{ secrets.GH_PAT }}"',
-    'run: echo "${{ secrets.GH_PAT }} ${{ secrets.CHROMATIC_ALPHA_PROJECT_TOKEN }} ${{ secrets.CHROMATIC_BETA_PROJECT_TOKEN }}"',
+    'run: echo "${{ secrets.GH_PAT }} ${{ secrets.CHROMATIC_PROJECT_TOKEN_ALPHA }} ${{ secrets.CHROMATIC_PROJECT_TOKEN_BETA }}"',
 )
 
 /** One rule, expressed as the workflow pair that must trip it. */
@@ -163,14 +163,14 @@ const fixtures: ContractFixture[] = [
             '        secrets:',
             '        with:\n            chromatic_mode: abort_on_error\n        secrets:',
         ),
-        expect: 'forwards none of CHROMATIC_ALPHA_PROJECT_TOKEN, CHROMATIC_BETA_PROJECT_TOKEN',
+        expect: 'forwards none of CHROMATIC_PROJECT_TOKEN_ALPHA, CHROMATIC_PROJECT_TOKEN_BETA',
     },
     {
         name: 'forwarding one of several project tokens is enough',
         reusable: CHROMATIC_REUSABLE,
         caller: CALLER.replace(
             '        secrets:\n            GH_PAT: ${{ secrets.GH_PAT }}',
-            '        with:\n            chromatic_mode: report\n        secrets:\n            GH_PAT: ${{ secrets.GH_PAT }}\n            CHROMATIC_BETA_PROJECT_TOKEN: ${{ secrets.CHROMATIC_BETA_PROJECT_TOKEN }}',
+            '        with:\n            chromatic_mode: report\n        secrets:\n            GH_PAT: ${{ secrets.GH_PAT }}\n            CHROMATIC_PROJECT_TOKEN_BETA: ${{ secrets.CHROMATIC_PROJECT_TOKEN_BETA }}',
         ),
         expect: null,
     },

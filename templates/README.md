@@ -81,7 +81,7 @@ file does not exist. Callers outside this repository always use
 | Reusable workflow | Secrets | Consumed by | Permissions a caller must grant |
 | --- | --- | --- | --- |
 | `call-detect-release-state.yml` | — | read-only detection | `contents: read` |
-| `call-pipeline.yml` | `CHROMATIC_GBT_SCOPE_PROJECT_TOKEN`, `CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN`, `CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN` | the Chromatic step, only when `chromatic_mode` is not `skip`. One token per Storybook project; all are exported into a single `nx run-many -t chromatic` | `contents: read` |
+| `call-pipeline.yml` | `CHROMATIC_PROJECT_TOKEN_GBT_SCOPE`, `CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE`, `CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT` | the Chromatic step, only when `chromatic_mode` is not `skip`. One token per Storybook project; all are exported into a single `nx run-many -t chromatic` | `contents: read` |
 | `call-apply-workspace-artifact.yml` | `GH_PAT`, `NPM_TOKEN` | `GH_PAT`: checkout/push, so a pushed commit can trigger follow-up workflows. `NPM_TOKEN`: exported as `NODE_AUTH_TOKEN` for `post_overlay_command` only | `contents: write`, `actions: read`, `id-token: write` |
 | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` | the `dry_run: false` path only — version PR, release tags, `changeset publish` | `contents: write`, `actions: write`, `id-token: write`, `pull-requests: write` |
 
@@ -119,7 +119,7 @@ target names the token variable it reads and owns its own CLI flags:
 ```json
 {
     "scripts": {
-        "chromatic": "chromatic --project-token=$CHROMATIC_GBT_SCOPE_PROJECT_TOKEN --exit-once-uploaded"
+        "chromatic": "chromatic --project-token=$CHROMATIC_PROJECT_TOKEN_GBT_SCOPE --exit-once-uploaded"
     }
 }
 ```
@@ -129,7 +129,8 @@ Because every declared token is exported before a single
 publish from one invocation — no per-project matrix job. Projects without a
 `chromatic` target are skipped by Nx as before.
 
-The token inventory in `call-pipeline.yml` is explicit, because a reusable
+Token names are `CHROMATIC_PROJECT_TOKEN_<PACKAGE>`. The token inventory in
+`call-pipeline.yml` is explicit, because a reusable
 workflow can only declare secrets by literal name and discovering names by
 reading package manifests would make the contract unreviewable. Adding a
 Storybook project therefore means one new declaration there, one `env:` entry

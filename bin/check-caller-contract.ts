@@ -30,7 +30,7 @@ const SECRET_REFERENCE = /secrets\.(?<name>[A-Za-z_][A-Za-z0-9_]*)/g
  * them from what the called workflow declares rather than hard-coding a list
  * that would drift every time a Storybook project is added.
  */
-const CHROMATIC_TOKEN = /^CHROMATIC_[A-Z0-9_]+_PROJECT_TOKEN$/
+const CHROMATIC_TOKEN = /^CHROMATIC_PROJECT_TOKEN_[A-Z0-9_]+$/
 
 /** Step policies `chromatic_mode` accepts; anything else fails the job at runtime. */
 const CHROMATIC_MODES = new Set(['skip', 'report', 'abort_on_error'])

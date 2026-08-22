@@ -55,9 +55,9 @@ jobs:
         secrets:
             # Optional; read only when chromatic_mode is not skip. Forward the
             # token(s) this repository's Storybook projects actually read.
-            CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
-            CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
-            CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN: ${{ secrets.CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN }}
+            CHROMATIC_PROJECT_TOKEN_GBT_SCOPE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_GBT_SCOPE }}
+            CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE }}
+            CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT: ${{ secrets.CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT }}
         with:
             chromatic_mode: skip
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
@@ -79,9 +79,9 @@ jobs:
         secrets:
             # Optional; read only when chromatic_mode is not skip. Forward the
             # token(s) this repository's Storybook projects actually read.
-            CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
-            CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
-            CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN: ${{ secrets.CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN }}
+            CHROMATIC_PROJECT_TOKEN_GBT_SCOPE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_GBT_SCOPE }}
+            CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE }}
+            CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT: ${{ secrets.CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT }}
         with:
             chromatic_mode: skip
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
@@ -103,9 +103,9 @@ jobs:
         secrets:
             # Optional; read only when chromatic_mode is not skip. Forward the
             # token(s) this repository's Storybook projects actually read.
-            CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
-            CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
-            CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN: ${{ secrets.CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN }}
+            CHROMATIC_PROJECT_TOKEN_GBT_SCOPE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_GBT_SCOPE }}
+            CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE }}
+            CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT: ${{ secrets.CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT }}
         with:
             chromatic_mode: skip
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}

@@ -24,13 +24,13 @@ name: z Pipeline 🚰
 on:
     workflow_call:
         secrets:
-            CHROMATIC_GBT_SCOPE_PROJECT_TOKEN:
+            CHROMATIC_PROJECT_TOKEN_GBT_SCOPE:
                 description: Chromatic project token for @snailicid3/gbt-scope.
                 required: false
-            CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN:
+            CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE:
                 description: Chromatic project token for @snailicid3/video-intelligence-viewer.
                 required: false
-            CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN:
+            CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT:
                 description: Chromatic project token for @gbt/template-example-react.
                 required: false
 
@@ -330,9 +330,9 @@ jobs:
               continue-on-error: ${{ inputs.chromatic_mode == 'report' }}
               shell: bash
               env:
-                  CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
-                  CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
-                  CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN: ${{ secrets.CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN }}
+                  CHROMATIC_PROJECT_TOKEN_GBT_SCOPE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_GBT_SCOPE }}
+                  CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE }}
+                  CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT: ${{ secrets.CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT }}
               run: |
                   set -euo pipefail
 
@@ -340,9 +340,9 @@ jobs:
                   provided=()
                   missing=()
                   for token_name in \
-                    CHROMATIC_GBT_SCOPE_PROJECT_TOKEN \
-                    CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN \
-                    CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN; do
+                    CHROMATIC_PROJECT_TOKEN_GBT_SCOPE \
+                    CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE \
+                    CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT; do
                     if [[ -n "${!token_name:-}" ]]; then
                       provided+=("$token_name")
                     else

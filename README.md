@@ -144,7 +144,7 @@ Requirements in the calling repository:
 
 1. A `chromatic` target in each Storybook project that reads its own token
    variable and carries its own flags, e.g.
-   `chromatic --project-token=$CHROMATIC_GBT_SCOPE_PROJECT_TOKEN --exit-once-uploaded`.
+   `chromatic --project-token=$CHROMATIC_PROJECT_TOKEN_GBT_SCOPE --exit-once-uploaded`.
 2. That token as a repository secret, from the Chromatic project settings page.
 3. A mode and the named token(s) when calling the pipeline:
 
@@ -155,8 +155,8 @@ jobs:
       contents: read
     uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
     secrets:
-      CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
-      CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
+      CHROMATIC_PROJECT_TOKEN_GBT_SCOPE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_GBT_SCOPE }}
+      CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE }}
     with:
       run_build: true
       run_test: true
