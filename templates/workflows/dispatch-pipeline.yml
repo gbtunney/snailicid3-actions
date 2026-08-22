@@ -70,12 +70,6 @@ on:
                 required: true
                 default: false
                 type: boolean
-            run_chromatic:
-                description: Run Chromatic visual tests (requires CHROMATIC_PROJECT_TOKEN secret)
-                required: true
-                default: false
-                type: boolean
-
             node_version:
                 description: Node version to run
                 required: true
@@ -129,9 +123,6 @@ permissions:
 jobs:
     pipeline:
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
-        secrets:
-            # Optional; only read when run_chromatic is true.
-            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
         with:
             mode: ${{ inputs.mode }}
             check_mode: ${{ inputs.check_mode }}
@@ -142,7 +133,6 @@ jobs:
             run_build: ${{ inputs.run_build }}
             run_test: ${{ inputs.run_test }}
             run_docs_build: ${{ inputs.run_docs_build }}
-            run_chromatic: ${{ inputs.run_chromatic }}
             node_version: ${{ inputs.node_version }}
             nx_cache_reset: ${{ inputs.nx_cache_reset }}
             pnpm_cache: ${{ inputs.pnpm_cache }}

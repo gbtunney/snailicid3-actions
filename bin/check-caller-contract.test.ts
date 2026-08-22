@@ -22,12 +22,6 @@ on:
                 description: Optional token.
                 required: false
 
-        inputs:
-            run_chromatic:
-                required: false
-                default: false
-                type: boolean
-
 permissions:
     contents: write
 
@@ -137,18 +131,6 @@ const fixtures: ContractFixture[] = [
             './.github/workflows/call-thing.yml',
         ),
         expect: 'a consumer repository has no such file',
-    },
-    {
-        name: 'run_chromatic without the token is rejected',
-        reusable: REUSABLE.replace(
-            '        secrets:\n            GH_PAT:',
-            '        secrets:\n            CHROMATIC_PROJECT_TOKEN:\n                description: Chromatic.\n                required: false\n            GH_PAT:',
-        ).replace('secrets.GH_PAT', 'secrets.GH_PAT }} ${{ secrets.CHROMATIC_PROJECT_TOKEN'),
-        caller: CALLER.replace(
-            '        secrets:',
-            '        with:\n            run_chromatic: true\n        secrets:',
-        ),
-        expect: 'does not forward CHROMATIC_PROJECT_TOKEN',
     },
     {
         name: 'granting fewer permissions than the called workflow declares is rejected',

@@ -336,16 +336,6 @@ const checkCallerWorkflow = (
             }
         }
 
-        if (
-            job.inputs['run_chromatic'] === 'true' &&
-            !forwarded.includes('CHROMATIC_PROJECT_TOKEN')
-        ) {
-            fail(
-                job.line,
-                `job "${job.id}" sets run_chromatic: true but does not forward CHROMATIC_PROJECT_TOKEN`,
-            )
-        }
-
         /** A job-level block replaces the workflow-level one rather than merging. */
         const granted = job.permissions ?? workflow.permissions
         if (!called.permissions) continue

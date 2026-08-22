@@ -1,0 +1,59 @@
+name: Run Chromatic
+description: >
+    Run every Nx project's chromatic target in one invocation, under the step
+    policy the caller picks. Credentials are the caller's business: set the
+    token variables your projects read as job-level env in your own workflow.
+    A composite action has no static secret contract, so the token names never
+    have to be known here.
+
+inputs:
+    mode:
+        description: skip | report | abort_on_error
+        required: false
+        default: report
+    target:
+        description: Nx target to run for every project that defines it.
+        required: false
+        default: chromatic
+
+runs:
+    using: composite
+    steps:
+        - name: Validate mode
+          shell: bash
+          run: |
+              set -euo pipefail
+              case "${{ inputs.mode }}" in
+                skip|report|abort_on_error) ;;
+                *)
+                  echo "::error::Invalid mode: ${{ inputs.mode }}. Expected skip, report, or abort_on_error."
+                  exit 1
+                  ;;
+              esac
+
+        - name: Skip Chromatic
+          if: ${{ inputs.mode == 'skip' }}
+          shell: bash
+          run: echo "mode=skip; the ${{ inputs.target }} target was not invoked and no credential is needed."
+
+        # One invocation for every project. Each project's target names the
+        # token variable it reads and owns its own Chromatic CLI flags, so
+        # projects with different tokens publish together; projects without
+        # the target are skipped by Nx.
+        - name: Run Chromatic
+          if: ${{ inputs.mode != 'skip' }}
+          shell: bash
+          run: |
+              set -euo pipefail
+
+              if pnpm exec nx run-many -t "${{ inputs.target }}"; then
+                exit 0
+              fi
+
+              if [[ "${{ inputs.mode }}" == "report" ]]; then
+                echo "::warning::The ${{ inputs.target }} target failed. mode=report, so the workflow continues."
+                exit 0
+              fi
+
+              echo "::error::The ${{ inputs.target }} target failed."
+              exit 1

@@ -68,6 +68,7 @@ steps:
   - uses: gbtunney/snailicid3-actions/.github/actions/report-prettier@v1
   - uses: gbtunney/snailicid3-actions/.github/actions/report-workspace@v1
   - uses: gbtunney/snailicid3-actions/.github/actions/require-up-to-date@v1
+  - uses: gbtunney/snailicid3-actions/.github/actions/run-chromatic@v1
 ```
 
 ### Requirements
@@ -102,7 +103,6 @@ To stamp all local clones at once, use the sync script:
 
 ```sh
 bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
-bin/sync-callers.sh --chromatic ../gbt-monorepov2
 bin/sync-callers.sh --check ../snailicid3   # writes nothing; fails on drift
 ```
 
@@ -118,10 +118,8 @@ deliberately until the migration dust settles.
 Behavior is controlled by explicit workflow inputs, following the repo
 pattern: every `call-*` input has a matching `dispatch-*` input for manual
 runs, and the triggered callers (`pr-checks`, `push-*`) pass the same inputs
-with values written in the file. The only repo-specific line is
-`run_chromatic:` in `pr-checks`/`push-main` — `bin/sync-callers.sh --chromatic`
-sets it to `true` during sync for repos that use Chromatic. Secrets
-(`CHROMATIC_PROJECT_TOKEN`, `NPM_TOKEN`, `GH_PAT`) are forwarded by name from
+with values written in the file. Templates carry no repo-specific values, so every consumer gets a byte-identical copy. Secrets
+(`NPM_TOKEN`, `GH_PAT`) are forwarded by name from
 each caller job to the workflow that declares them, so a template only names
 the secrets that template's calls actually consume; the `DISABLE_NX_CLOUD`
 repository variable remains the one vars-based switch (pre-existing Nx Cloud
@@ -129,38 +127,26 @@ policy).
 
 ### Chromatic
 
-`call-pipeline.yml` can run Chromatic visual tests. It executes
-`pnpm exec nx run-many -t chromatic`, which runs each project's `chromatic`
-package.json script (Nx infers scripts as targets); projects without one are
-skipped, so it is safe to enable repo-wide.
+Chromatic is a **composite action**, not part of `call-pipeline.yml`, and that
+is deliberate.
 
-Requirements in the calling repository:
+`workflow_call.secrets` has no dynamic form: a reusable workflow can only
+receive secrets under names it declares literally. So running Chromatic inside
+the shared pipeline meant this repository listing every consumer's project
+token by name, and a new Storybook project in an unrelated repository became an
+edit and a `v1` re-tag here. A composite action has no such contract — the
+caller sets `env:` in its own workflow with whatever names it likes.
 
-1. A `chromatic` script in each Storybook project's package.json that reads
-   `$CHROMATIC_PROJECT_TOKEN` (see `@gbt/template-example-react`).
-2. The `CHROMATIC_PROJECT_TOKEN` repository secret (from the Chromatic project
-   settings page) — the only secret Chromatic needs.
-3. Pass the flag and the secret when calling the pipeline:
+So `run-chromatic` owns the step policy (`skip`, `report`, `abort_on_error`)
+and the single `pnpm exec nx run-many -t chromatic` that covers every project;
+the consumer owns which projects exist, which token each one reads, and each
+project's Chromatic CLI flags. Projects without the target are skipped by Nx,
+and projects with different tokens still publish from one invocation.
 
-```yaml
-jobs:
-  pipeline:
-    permissions:
-      contents: read
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
-    secrets:
-      CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
-    with:
-      run_build: true
-      run_test: true
-      run_chromatic: true
-```
-
-Repositories that don't need Chromatic (e.g. snailicid3) keep
-`run_chromatic: false` in their callers (the template default). Manual runs:
-`dispatch-pipeline` exposes `run_chromatic` as a checkbox, so Chromatic can be
-triggered and tested by hand in any repo with the secret set, independent of
-what the triggered callers do.
+Add a Chromatic workflow to the consumer repository — it is **not** a synced
+template, because the token names are repository-specific. See
+[`templates/README.md`](templates/README.md) for a complete example and the
+matching package target.
 
 ## Commit message convention
 

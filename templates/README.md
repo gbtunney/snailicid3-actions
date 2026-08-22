@@ -7,7 +7,6 @@ are the source of truth and are copied verbatim:
 
 ```sh
 bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
-bin/sync-callers.sh --chromatic ../gbt-monorepov2   # repos with a chromatic script
 bin/sync-callers.sh --check ../snailicid3           # fail on drift, write nothing
 ```
 
@@ -43,8 +42,7 @@ what a caller sends against what the called workflow declares.
 Every secret is optional. An unset repository secret forwards as an empty
 string, and the reusable workflow falls back (`GH_PAT` → `github.token`) or
 skips the step that would have used it — so a repository that never publishes
-does not need `NPM_TOKEN`, and one that never runs Chromatic does not need
-`CHROMATIC_PROJECT_TOKEN`.
+does not need `NPM_TOKEN`.
 
 ### 2. Grant at least the permissions the called workflow declares
 
@@ -81,7 +79,7 @@ file does not exist. Callers outside this repository always use
 | Reusable workflow | Secrets | Consumed by | Permissions a caller must grant |
 | --- | --- | --- | --- |
 | `call-detect-release-state.yml` | — | read-only detection | `contents: read` |
-| `call-pipeline.yml` | `CHROMATIC_PROJECT_TOKEN` | the Chromatic step, only when `run_chromatic: true` | `contents: read` |
+| `call-pipeline.yml` | — | takes no secrets | `contents: read` |
 | `call-apply-workspace-artifact.yml` | `GH_PAT`, `NPM_TOKEN` | `GH_PAT`: checkout/push, so a pushed commit can trigger follow-up workflows. `NPM_TOKEN`: exported as `NODE_AUTH_TOKEN` for `post_overlay_command` only | `contents: write`, `actions: read`, `id-token: write` |
 | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` | the `dry_run: false` path only — version PR, release tags, `changeset publish` | `contents: write`, `actions: write`, `id-token: write`, `pull-requests: write` |
 
@@ -96,11 +94,87 @@ exactly what the innermost workflow can read.
 | `dispatch-release-plan.yml` | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` |
 | `push-release.yml` | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` |
 | `dispatch-workspace-update.yml` | `call-pipeline.yml`, `call-apply-workspace-artifact.yml` | `GH_PAT` (no `post_overlay_command`, so nothing reaches npm) |
-| `pr-checks.yml` | `call-detect-release-state.yml`, `call-pipeline.yml` | `CHROMATIC_PROJECT_TOKEN` |
-| `push-main.yml` | `call-pipeline.yml` | `CHROMATIC_PROJECT_TOKEN` |
-| `dispatch-pipeline.yml` | `call-pipeline.yml` | `CHROMATIC_PROJECT_TOKEN` |
-| `dispatch-smoke-matrix.yml` | `call-pipeline.yml` | — (`run_chromatic` stays false) |
+| `pr-checks.yml` | `call-detect-release-state.yml`, `call-pipeline.yml` | — |
+| `push-main.yml` | `call-pipeline.yml` | — |
+| `dispatch-pipeline.yml` | `call-pipeline.yml` | — |
+| `dispatch-smoke-matrix.yml` | `call-pipeline.yml` | — |
 | `dispatch-release-state.yml` | `call-detect-release-state.yml` | — |
+
+## Chromatic lives outside the reusable pipeline
+
+`call-pipeline.yml` declares no secrets, and does not run Chromatic.
+
+It used to. The problem was structural rather than cosmetic:
+`workflow_call.secrets` has no dynamic form, so a reusable workflow can only
+receive secrets under names it declares literally. Running Chromatic there
+therefore meant this shared repository listing every consumer's project token
+by name — and a new Storybook project in an unrelated repository became an edit
+and a `v1` re-tag here. That is the dependency pointing the wrong way.
+
+A composite action has no such contract. The caller sets `env:` in its own
+workflow, with whatever names it likes, so
+[`run-chromatic`](../.github/actions/run-chromatic/action.yml) owns the
+orchestration while the consumer owns the credentials:
+
+| Owned here | Owned by the consumer |
+| --- | --- |
+| `mode` — `skip`, `report`, `abort_on_error` | which projects exist |
+| running `nx run-many -t chromatic` once for every project | which token each project reads |
+| turning a failed target into a warning or a failure | each project's Chromatic CLI flags |
+
+Add a workflow like this to the consumer repository. It is **not** a synced
+template — the token names are repository-specific, so `bin/sync-callers.sh`
+must not own this file:
+
+```yaml
+name: Chromatic
+
+on:
+    pull_request:
+        branches: [main]
+
+permissions:
+    contents: read
+
+# Job-level env, so every token your projects read is in scope for the step.
+# These names are yours — snailicid3-actions never sees them.
+env:
+    HUSKY: 0
+    CHROMATIC_PROJECT_TOKEN_GBT_SCOPE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_GBT_SCOPE }}
+    CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE }}
+
+jobs:
+    chromatic:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+            - uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+
+            - uses: gbtunney/snailicid3-actions/.github/actions/run-chromatic@v1
+              with:
+                  mode: abort_on_error
+```
+
+Each project's `chromatic` target names the variable it reads and carries its
+own flags, so one invocation covers projects with different tokens, and
+projects without the target are skipped by Nx:
+
+```json
+{
+    "scripts": {
+        "chromatic": "chromatic --project-token=$CHROMATIC_PROJECT_TOKEN_GBT_SCOPE --exit-once-uploaded"
+    }
+}
+```
 
 ## Changing the contract
 

@@ -4,21 +4,21 @@
 # SOURCE: gbtunney/snailicid3-actions
 #
 # Secrets contract:
-#   CHROMATIC_PROJECT_TOKEN is the only secret this workflow reads, and only
-#   when run_chromatic=true. Callers forward it by name — see
-#   templates/README.md. A caller that never enables Chromatic forwards no
-#   secrets at all.
+#   None. This workflow reads no secrets at all.
+#
+#   Chromatic used to live here, which forced this shared repository to declare
+#   every consumer's project token by literal name — `workflow_call.secrets`
+#   has no dynamic form. That made adding a Storybook project in an unrelated
+#   repository an edit and a re-tag here. Chromatic now ships as the
+#   run-chromatic composite action, which has no static secret contract: a
+#   consumer sets whatever token variables its projects read as job-level env
+#   in its own workflow. See templates/README.md.
 # ─────────────────────────────────────────────────────────────
 
 name: z Pipeline 🚰
 
 on:
     workflow_call:
-        secrets:
-            CHROMATIC_PROJECT_TOKEN:
-                description: Chromatic project token. Required when run_chromatic is true.
-                required: false
-
         inputs:
             checkout_ref:
                 description: Optional ref to check out before running the pipeline.
@@ -57,12 +57,6 @@ on:
                 type: boolean
 
             run_docs_build:
-                required: false
-                default: false
-                type: boolean
-
-            run_chromatic:
-                description: Run Chromatic visual tests via `nx run-many -t chromatic` after build/test. Requires the CHROMATIC_PROJECT_TOKEN secret.
                 required: false
                 default: false
                 type: boolean
@@ -215,7 +209,6 @@ jobs:
                     echo "- run_build: \`${{ inputs.run_build }}\`"
                     echo "- run_test: \`${{ inputs.run_test }}\`"
                     echo "- run_docs_build: \`${{ inputs.run_docs_build }}\`"
-                    echo "- run_chromatic: \`${{ inputs.run_chromatic }}\`"
                     echo "- disable_nx_cloud (resolved): \`${{ steps.nx_cloud_policy.outputs.effective_disable_nx_cloud }}\`"
                     echo "- upload_workspace_artifact: \`${{ inputs.upload_workspace_artifact }}\`"
                     echo "- use_nx_affected: \`${{ inputs.use_nx_affected }}\`"
@@ -292,25 +285,6 @@ jobs:
               continue-on-error: ${{ inputs.mode == 'report' }}
               run: pnpm test
 
-            # Chromatic runs each project's `chromatic` package.json script
-            # (Nx infers scripts as targets); projects without one are skipped.
-            # The script itself owns the chromatic CLI flags.
-            - name: 🎨 Run Chromatic
-              if: ${{ inputs.run_chromatic }}
-              continue-on-error: ${{ inputs.mode == 'report' }}
-              shell: bash
-              env:
-                  CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
-              run: |
-                  set -euo pipefail
-
-                  if [[ -z "${CHROMATIC_PROJECT_TOKEN:-}" ]]; then
-                    echo "::error::run_chromatic is enabled but the CHROMATIC_PROJECT_TOKEN secret was not provided. Add CHROMATIC_PROJECT_TOKEN to the calling job's secrets: block (see templates/README.md) and set it in the repository secrets."
-                    exit 1
-                  fi
-
-                  pnpm exec nx run-many -t chromatic
-
             - name: 📘 Run Docs Build
               if: ${{ inputs.run_docs_build && !inputs.use_nx_affected }}
               continue-on-error: ${{ inputs.mode == 'report' }}
@@ -382,8 +356,15 @@ jobs:
               shell: bash
               run: |
                   ARCHIVE_PATH="${{ runner.temp }}/workspace-artifact.tar.gz"
+                  # .env files are excluded so a token written for a local or
+                  # CI Chromatic run cannot ride along into a downloadable
+                  # artifact. .gitignore does not apply here — tar does not read
+                  # it — and .env.example is git-tracked, so the overlay's own
+                  # checkout still has it.
                   tar -czf "$ARCHIVE_PATH" \
                     --exclude='.git' \
+                    --exclude='.env*' \
+                    --exclude='**/.env*' \
                     --exclude='**/node_modules' \
                     --exclude='**/.nx/cache' \
                     --exclude='**/.pnpm-store' \
