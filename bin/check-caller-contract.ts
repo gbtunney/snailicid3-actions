@@ -1,157 +1,212 @@
-// ─────────────────────────────────────────────────────────────
-// Validate the caller <-> reusable-workflow contract.
-//
-// A cross-repository caller that gets this contract wrong does not fail a
-// job — GitHub refuses to start the run ("startup_failure", zero jobs),
-// which is invisible to any same-repository self-test. This makes the
-// boundary checkable without dispatching a workflow.
-//
-// Usage:
-//   pnpm check:callers [--reusable <dir>] [--external] [<path> ...]
-//
-//   <path>       workflow file or directory of caller workflows to check.
-//                Defaults to .github/workflows and templates/workflows.
-//   --reusable   directory holding this repository's call-*.yml reusable
-//                workflows (default .github/workflows).
-//   --external   treat every <path> as a consumer-repository caller, which
-//                must reference reusable workflows by their fully qualified
-//                <owner>/<repo>/...@<ref> path. Implied for templates/.
-// ─────────────────────────────────────────────────────────────
+/**
+ * Validate the caller ⇄ reusable-workflow contract.
+ *
+ * A cross-repository caller that gets this contract wrong does not fail a job:
+ * GitHub refuses to start the run at all ("startup_failure", zero jobs), which
+ * is invisible to any same-repository self-test. Checking it statically is the
+ * only way to catch the mistake before a consumer does.
+ *
+ * @example
+ * ```sh
+ * pnpm check:callers [--reusable <dir>] [--external] [<path> ...]
+ * ```
+ */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, join, relative, sep } from 'node:path'
 
+/** Repository that owns the reusable workflows, as consumers reference it. */
 export const SOURCE_REPO = 'gbtunney/snailicid3-actions'
 
+/** Ordering for GitHub permission levels, so a caller's grant can be compared. */
 const PERMISSION_LEVELS: Record<string, number> = { none: 0, read: 1, write: 2 }
 
-// ── minimal YAML reader ──────────────────────────────────────
-// Workflow files are uniformly indented mappings; this pulls out the handful
-// of keys the contract depends on without taking a YAML dependency, so the
-// check can run before any install step.
+const BLOCK_SCALAR_VALUE = /^[|>][+-]?\d*(\s+#.*)?$/
+const MAPPING_KEY_LINE = /^(["']?)([A-Za-z0-9_.$-][^:'"]*)\1:(?:\s+(.*))?$/
+const SECRET_REFERENCE = /secrets\.([A-Za-z_][A-Za-z0-9_]*)/g
 
-const BLOCK_SCALAR = /^[|>][+-]?\d*(\s+#.*)?$/
-const KEY_LINE = /^(["']?)([A-Za-z0-9_.$-][^:'"]*)\1:(?:\s+(.*))?$/
-
-interface Node {
+/**
+ * One mapping key found in a workflow file.
+ *
+ * Workflow files are uniformly indented mappings, so tracking indentation is
+ * enough to answer the handful of structural questions the contract depends on.
+ * That keeps the check dependency-free, so it can run before any install step.
+ */
+interface WorkflowNode {
+    /** Leading-space count, which is what establishes parent/child nesting. */
     indent: number
+    /** The mapping key itself, unquoted. */
     key: string
+    /** Inline scalar after the colon; empty when the value is a nested block. */
     value: string
+    /** One-based line number, for pointing a reviewer at the right place. */
     line: number
 }
 
-interface IndexedNode extends Node {
+/** A {@link WorkflowNode} plus its position in the flat node list. */
+interface IndexedWorkflowNode extends WorkflowNode {
     index: number
 }
 
-const parse = (text: string): Node[] => {
-    const nodes: Node[] = []
-    let scalarIndent: number | null = null
+/**
+ * Remove YAML comments so they cannot be mistaken for workflow content.
+ *
+ * Without this, a line documenting a secret — `# reads ${{ secrets.GH_PAT }}` —
+ * makes the secret look consumed, and the "declared but never read" rule
+ * silently stops working. Comments explaining secrets are common in these
+ * files, so the false negative is the likely case rather than the exotic one.
+ *
+ * A `#` only opens a comment at the start of a line or after whitespace, and
+ * never inside quotes, which also leaves shell constructs such as `${#array}`
+ * inside `run:` blocks intact.
+ */
+export const stripComments = (text: string): string =>
+    text
+        .split(/\r?\n/)
+        .map((rawLine) => {
+            if (rawLine.trimStart().startsWith('#')) return ''
 
-    text.split(/\r?\n/).forEach((raw, index) => {
-        const trimmed = raw.trim()
-        const indent = raw.length - raw.trimStart().length
+            let quote: string | null = null
+            let previous = ''
 
-        if (scalarIndent !== null) {
-            if (trimmed === '' || indent > scalarIndent) return
-            scalarIndent = null
+            for (const [position, character] of [...rawLine].entries()) {
+                if (quote) {
+                    if (character === quote) quote = null
+                } else if (character === '"' || character === "'") {
+                    quote = character
+                } else if (character === '#' && (position === 0 || /\s/.test(previous))) {
+                    return rawLine.slice(0, position)
+                }
+                previous = character
+            }
+
+            return rawLine
+        })
+        .join('\n')
+
+/** Flatten a workflow file into its mapping keys, skipping comments and block scalars. */
+const parseWorkflowNodes = (text: string): WorkflowNode[] => {
+    const nodes: WorkflowNode[] = []
+    let blockScalarIndent: number | null = null
+
+    text.split(/\r?\n/).forEach((rawLine, offset) => {
+        const trimmed = rawLine.trim()
+        const indent = rawLine.length - rawLine.trimStart().length
+
+        if (blockScalarIndent !== null) {
+            if (trimmed === '' || indent > blockScalarIndent) return
+            blockScalarIndent = null
         }
         if (trimmed === '' || trimmed.startsWith('#')) return
 
-        // Sequence entries (steps, matrix values) are opaque here, but a block
-        // scalar opened inside one still has to be skipped over.
+        // Sequence entries are opaque, but a block scalar opened inside one
+        // still has to be skipped over.
         const body = trimmed.startsWith('- ') ? trimmed.slice(2).trim() : trimmed
-        const match = KEY_LINE.exec(body)
-        if (!match) return
+        const keyMatch = MAPPING_KEY_LINE.exec(body)
+        if (!keyMatch) return
 
-        const value = (match[3] ?? '').trim()
-        if (BLOCK_SCALAR.test(value)) scalarIndent = indent
+        const value = (keyMatch[3] ?? '').trim()
+        if (BLOCK_SCALAR_VALUE.test(value)) blockScalarIndent = indent
 
         if (trimmed.startsWith('- ')) return
-        nodes.push({ indent, key: match[2]!.trim(), value, line: index + 1 })
+        nodes.push({ indent, key: keyMatch[2]!.trim(), value, line: offset + 1 })
     })
 
     return nodes
 }
 
-const childrenOf = (nodes: Node[], index: number): IndexedNode[] => {
-    if (index < 0) return []
-    const parent = nodes[index]!
-    const children: IndexedNode[] = []
+/** Keys nested directly under `nodes[parentIndex]`, ignoring deeper levels. */
+const directChildren = (nodes: WorkflowNode[], parentIndex: number): IndexedWorkflowNode[] => {
+    if (parentIndex < 0) return []
+
+    const parent = nodes[parentIndex]!
+    const children: IndexedWorkflowNode[] = []
     let childIndent: number | null = null
 
-    for (let i = index + 1; i < nodes.length; i++) {
-        const node = nodes[i]!
+    for (const [offset, node] of nodes.slice(parentIndex + 1).entries()) {
         if (node.indent <= parent.indent) break
         if (childIndent === null) childIndent = node.indent
-        if (node.indent === childIndent) children.push({ ...node, index: i })
+        if (node.indent === childIndent) children.push({ ...node, index: parentIndex + 1 + offset })
     }
 
     return children
 }
 
-const findChild = (nodes: Node[], index: number, key: string): number => {
-    const hit = childrenOf(nodes, index).find((node) => node.key === key)
-    return hit ? hit.index : -1
-}
+/** Index of the child named `key`, or -1 when absent. */
+const childIndex = (nodes: WorkflowNode[], parentIndex: number, key: string): number =>
+    directChildren(nodes, parentIndex).find((node) => node.key === key)?.index ?? -1
 
-const topLevel = (nodes: Node[], key: string): number =>
+/** Index of the top-level key named `key`, or -1 when absent. */
+const topLevelIndex = (nodes: WorkflowNode[], key: string): number =>
     nodes.findIndex((node) => node.indent === 0 && node.key === key)
 
-const permissionsAt = (nodes: Node[], index: number): Record<string, string> | null => {
-    if (index < 0) return null
-    const map: Record<string, string> = {}
-    for (const child of childrenOf(nodes, index)) map[child.key] = child.value
-    return map
+/** Read a `permissions:` block into scope → level, or null when there is none. */
+const readPermissions = (
+    nodes: WorkflowNode[],
+    permissionsIndex: number,
+): Record<string, string> | null => {
+    if (permissionsIndex < 0) return null
+
+    const permissions: Record<string, string> = {}
+    for (const scope of directChildren(nodes, permissionsIndex)) permissions[scope.key] = scope.value
+    return permissions
 }
 
-// ── workflow model ───────────────────────────────────────────
-
+/** A secret declared under `on.workflow_call.secrets`. */
 interface DeclaredSecret {
     required: boolean
 }
 
+/** A job that calls another workflow, and the contract it passes along. */
 interface CallerJob {
     id: string
     line: number
+    /** Raw `uses:` value, or null for a normal `runs-on` job. */
     uses: string | null
     usesLine: number
+    /** True when the job forwards everything via `secrets: inherit`. */
     inheritsSecrets: boolean
+    /** Secret names forwarded by name, or null when no `secrets:` block exists. */
     forwarded: string[] | null
+    /** Literal `with:` values, used to spot inputs that imply a secret. */
     inputs: Record<string, string>
+    /** Job-level permissions, which replace the workflow-level block entirely. */
     permissions: Record<string, string> | null
 }
 
+/** Everything the contract check needs to know about one workflow file. */
 export interface Workflow {
     path: string
     declared: Map<string, DeclaredSecret>
+    /** Secrets actually referenced in workflow content, comments excluded. */
     referenced: Set<string>
     jobs: CallerJob[]
     permissions: Record<string, string> | null
 }
 
+/** Read one workflow file into the model the contract rules run against. */
 export const loadWorkflow = (path: string): Workflow => {
     const text = readFileSync(path, 'utf8')
-    const nodes = parse(text)
+    const nodes = parseWorkflowNodes(text)
 
-    const workflowCall = findChild(nodes, topLevel(nodes, 'on'), 'workflow_call')
-    const secretsIndex = findChild(nodes, workflowCall, 'secrets')
+    const workflowCallIndex = childIndex(nodes, topLevelIndex(nodes, 'on'), 'workflow_call')
+    const declaredIndex = childIndex(nodes, workflowCallIndex, 'secrets')
     const declared = new Map<string, DeclaredSecret>()
 
-    for (const secret of childrenOf(nodes, secretsIndex)) {
-        const required = childrenOf(nodes, secret.index).find((node) => node.key === 'required')
+    for (const secret of directChildren(nodes, declaredIndex)) {
+        const required = directChildren(nodes, secret.index).find((node) => node.key === 'required')
         declared.set(secret.key, { required: required?.value === 'true' })
     }
 
     const referenced = new Set(
-        [...text.matchAll(/secrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[1]!),
+        [...stripComments(text).matchAll(SECRET_REFERENCE)].map((reference) => reference[1]!),
     )
 
-    const jobs = childrenOf(nodes, topLevel(nodes, 'jobs')).map((job): CallerJob => {
-        const uses = childrenOf(nodes, job.index).find((node) => node.key === 'uses')
-        const secrets = findChild(nodes, job.index, 'secrets')
+    const jobs = directChildren(nodes, topLevelIndex(nodes, 'jobs')).map((job): CallerJob => {
+        const uses = directChildren(nodes, job.index).find((node) => node.key === 'uses')
+        const forwardedIndex = childIndex(nodes, job.index, 'secrets')
         const inputs: Record<string, string> = {}
-        for (const input of childrenOf(nodes, findChild(nodes, job.index, 'with'))) {
+        for (const input of directChildren(nodes, childIndex(nodes, job.index, 'with'))) {
             inputs[input.key] = input.value
         }
 
@@ -160,10 +215,13 @@ export const loadWorkflow = (path: string): Workflow => {
             line: job.line,
             uses: uses?.value ?? null,
             usesLine: uses?.line ?? job.line,
-            inheritsSecrets: nodes[secrets]?.value === 'inherit',
-            forwarded: secrets < 0 ? null : childrenOf(nodes, secrets).map((node) => node.key),
+            inheritsSecrets: nodes[forwardedIndex]?.value === 'inherit',
+            forwarded:
+                forwardedIndex < 0
+                    ? null
+                    : directChildren(nodes, forwardedIndex).map((secret) => secret.key),
             inputs,
-            permissions: permissionsAt(nodes, findChild(nodes, job.index, 'permissions')),
+            permissions: readPermissions(nodes, childIndex(nodes, job.index, 'permissions')),
         }
     })
 
@@ -172,45 +230,45 @@ export const loadWorkflow = (path: string): Workflow => {
         declared,
         referenced,
         jobs,
-        permissions: permissionsAt(nodes, topLevel(nodes, 'permissions')),
+        permissions: readPermissions(nodes, topLevelIndex(nodes, 'permissions')),
     }
 }
 
-// ── target resolution ────────────────────────────────────────
-
-interface Target {
+/** A reusable workflow in {@link SOURCE_REPO} that a caller job points at. */
+interface CallTarget {
+    /** Bare filename, e.g. `call-pipeline.yml`. */
     file: string
+    /** True for `<owner>/<repo>/...@<ref>`, which is what consumers must use. */
     qualified: boolean
-    ref?: string
 }
 
-const resolveTarget = (uses: string | null): Target | null => {
+/** Resolve a `uses:` value to one of this repository's reusable workflows. */
+const resolveTarget = (uses: string | null): CallTarget | null => {
     if (!uses) return null
 
-    // Local: ./.github/workflows/x.yml or $/.github/workflows/x.yml
     const local = /^[.$]\/\.github\/workflows\/(?<file>[^@\s]+)$/.exec(uses)
     if (local?.groups) return { file: local.groups['file']!, qualified: false }
 
-    // Remote: owner/repo/.github/workflows/x.yml@ref
     const remote =
         /^(?<repo>[^/]+\/[^/]+)\/\.github\/workflows\/(?<file>[^@\s]+)@(?<ref>\S+)$/.exec(uses)
     if (remote?.groups && remote.groups['repo'] === SOURCE_REPO) {
-        return { file: remote.groups['file']!, qualified: true, ref: remote.groups['ref']! }
+        return { file: remote.groups['file']!, qualified: true }
     }
 
     return null
 }
 
-// ── checks ───────────────────────────────────────────────────
+/** Reports a contract violation at a given line. */
+type Reporter = (line: number, message: string) => void
 
-export interface CheckResult {
-    problems: string[]
-    notes: string[]
-    reusable: Map<string, Workflow>
-    files: string[]
-}
-
-const checkReusable = (workflow: Workflow, fail: (l: number, m: string) => void): void => {
+/**
+ * Check a reusable workflow's own secret declarations.
+ *
+ * Declared-but-unread means the contract advertises something callers are
+ * expected to supply for no reason; read-but-undeclared means a caller cannot
+ * supply it at all, because GitHub rejects secrets the callee never declared.
+ */
+const checkReusableWorkflow = (workflow: Workflow, fail: Reporter): void => {
     for (const secret of workflow.declared.keys()) {
         if (!workflow.referenced.has(secret)) {
             fail(1, `declares secret ${secret} but never reads it — drop the declaration or use it`)
@@ -225,15 +283,14 @@ const checkReusable = (workflow: Workflow, fail: (l: number, m: string) => void)
     }
 }
 
-const checkCaller = (
+/** Check every job in a caller against the workflow it invokes. */
+const checkCallerWorkflow = (
     workflow: Workflow,
-    options: { external: boolean; reusable: Map<string, Workflow> },
-    fail: (line: number, message: string) => void,
-    warn: (line: number, message: string) => void,
+    context: { external: boolean; reusable: Map<string, Workflow> },
+    fail: Reporter,
+    warn: Reporter,
 ): void => {
     for (const job of workflow.jobs) {
-        const target = resolveTarget(job.uses)
-
         if (job.inheritsSecrets) {
             fail(
                 job.line,
@@ -241,9 +298,10 @@ const checkCaller = (
             )
         }
 
+        const target = resolveTarget(job.uses)
         if (!target) continue
 
-        if (options.external && !target.qualified) {
+        if (context.external && !target.qualified) {
             fail(
                 job.usesLine,
                 `job "${job.id}" references ${job.uses} — a consumer repository has no such file; use ${SOURCE_REPO}/.github/workflows/...@<ref>`,
@@ -251,7 +309,7 @@ const checkCaller = (
             continue
         }
 
-        const called = options.reusable.get(target.file)
+        const called = context.reusable.get(target.file)
         if (!called) {
             fail(job.usesLine, `job "${job.id}" calls unknown workflow ${target.file}`)
             continue
@@ -261,22 +319,30 @@ const checkCaller = (
 
         for (const secret of forwarded) {
             if (!called.declared.has(secret)) {
-                fail(job.line, `job "${job.id}" forwards ${secret}, which ${target.file} does not declare`)
+                fail(
+                    job.line,
+                    `job "${job.id}" forwards ${secret}, which ${target.file} does not declare`,
+                )
             }
         }
 
-        for (const [secret, meta] of called.declared) {
-            if (meta.required && !forwarded.includes(secret)) {
+        for (const [secret, declaration] of called.declared) {
+            if (declaration.required && !forwarded.includes(secret)) {
                 fail(job.line, `job "${job.id}" omits ${secret}, required by ${target.file}`)
             }
         }
 
-        if (job.inputs['run_chromatic'] === 'true' && !forwarded.includes('CHROMATIC_PROJECT_TOKEN')) {
-            fail(job.line, `job "${job.id}" sets run_chromatic: true but does not forward CHROMATIC_PROJECT_TOKEN`)
+        if (
+            job.inputs['run_chromatic'] === 'true' &&
+            !forwarded.includes('CHROMATIC_PROJECT_TOKEN')
+        ) {
+            fail(
+                job.line,
+                `job "${job.id}" sets run_chromatic: true but does not forward CHROMATIC_PROJECT_TOKEN`,
+            )
         }
 
-        // A caller must grant at least what the called workflow declares, or
-        // the whole run dies at startup with zero jobs.
+        // A job-level block replaces the workflow-level one rather than merging.
         const granted = job.permissions ?? workflow.permissions
         if (!called.permissions) continue
 
@@ -289,9 +355,9 @@ const checkCaller = (
         }
 
         for (const [scope, level] of Object.entries(called.permissions)) {
-            const have = PERMISSION_LEVELS[granted[scope] ?? ''] ?? -1
-            const need = PERMISSION_LEVELS[level] ?? 0
-            if (have < need) {
+            const grantedLevel = PERMISSION_LEVELS[granted[scope] ?? ''] ?? -1
+            const requiredLevel = PERMISSION_LEVELS[level] ?? 0
+            if (grantedLevel < requiredLevel) {
                 fail(
                     job.line,
                     `job "${job.id}" grants ${scope}: ${granted[scope] ?? 'nothing'} but ${target.file} declares ${scope}: ${level}`,
@@ -301,7 +367,8 @@ const checkCaller = (
     }
 }
 
-const expand = (path: string): string[] =>
+/** Expand a path to the workflow files it holds, or to itself when it is a file. */
+const expandPath = (path: string): string[] =>
     statSync(path).isDirectory()
         ? readdirSync(path)
               .filter((file) => file.endsWith('.yml') || file.endsWith('.yaml'))
@@ -309,32 +376,50 @@ const expand = (path: string): string[] =>
               .map((file) => join(path, file))
         : [path]
 
-export const runContractCheck = (options: {
-    reusableDir: string
+/** Options accepted by {@link runContractCheck} and the CLI. */
+export interface ContractCheckOptions {
+    /** Directory holding this repository's `call-*.yml` reusable workflows. */
+    reusableDirectory: string
+    /** Caller workflow files or directories to check. */
     targets: string[]
+    /** Treat every target as a consumer-repository caller. */
     forceExternal?: boolean
-}): CheckResult => {
+}
+
+/** Outcome of a contract check: blocking problems, advisory notes, and context. */
+export interface ContractCheckResult {
+    problems: string[]
+    notes: string[]
+    reusable: Map<string, Workflow>
+    files: string[]
+}
+
+/** Run every contract rule and collect what it found, without printing or exiting. */
+export const runContractCheck = (options: ContractCheckOptions): ContractCheckResult => {
     const problems: string[] = []
     const notes: string[] = []
 
     const reusable = new Map<string, Workflow>()
-    for (const file of expand(options.reusableDir)) {
-        if (!basename(file).startsWith('call-')) continue
-        reusable.set(basename(file), loadWorkflow(file))
+    for (const file of expandPath(options.reusableDirectory)) {
+        if (basename(file).startsWith('call-')) reusable.set(basename(file), loadWorkflow(file))
     }
 
     if (reusable.size === 0) {
-        throw new Error(`no call-*.yml reusable workflows found in ${options.reusableDir}`)
+        throw new Error(`no call-*.yml reusable workflows found in ${options.reusableDirectory}`)
     }
 
     for (const workflow of reusable.values()) {
-        checkReusable(workflow, (line, message) => problems.push(`${workflow.path}:${line}: ${message}`))
+        checkReusableWorkflow(workflow, (line, message) =>
+            problems.push(`${workflow.path}:${line}: ${message}`),
+        )
     }
 
-    const files = options.targets.flatMap(expand)
+    const files = options.targets.flatMap(expandPath)
     for (const file of files) {
-        const external = options.forceExternal === true || relative('.', file).split(sep).includes('templates')
-        checkCaller(
+        const external =
+            options.forceExternal === true || relative('.', file).split(sep).includes('templates')
+
+        checkCallerWorkflow(
             loadWorkflow(file),
             { external, reusable },
             (line, message) => problems.push(`${file}:${line}: ${message}`),
@@ -345,31 +430,43 @@ export const runContractCheck = (options: {
     return { problems, notes, reusable, files }
 }
 
-// ── cli ──────────────────────────────────────────────────────
-
-const main = (): void => {
-    const args = process.argv.slice(2)
-    let reusableDir = join('.github', 'workflows')
-    let forceExternal = false
+/** Turn CLI arguments into {@link ContractCheckOptions}, applying defaults. */
+export const parseArguments = (argv: string[]): ContractCheckOptions => {
+    const remaining = [...argv]
     const targets: string[] = []
+    let reusableDirectory = join('.github', 'workflows')
+    let forceExternal = false
 
-    for (let i = 0; i < args.length; i++) {
-        const arg = args[i]!
+    while (remaining.length > 0) {
+        const argument = remaining.shift()!
+
         // `pnpm run <script> -- --flag` forwards a bare separator through.
-        if (arg === '--') continue
-        else if (arg === '--reusable') reusableDir = args[++i]!
-        else if (arg === '--external') forceExternal = true
-        else if (arg.startsWith('-')) {
-            console.error(`unknown option: ${arg}`)
-            process.exit(2)
-        } else targets.push(arg)
+        if (argument === '--') continue
+
+        if (argument === '--reusable') {
+            const directory = remaining.shift()
+            if (directory === undefined) throw new Error('--reusable needs a directory')
+            reusableDirectory = directory
+        } else if (argument === '--external') {
+            forceExternal = true
+        } else if (argument.startsWith('-')) {
+            throw new Error(`unknown option: ${argument}`)
+        } else {
+            targets.push(argument)
+        }
     }
 
-    if (targets.length === 0) targets.push(reusableDir, join('templates', 'workflows'))
+    if (targets.length === 0) targets.push(reusableDirectory, join('templates', 'workflows'))
 
-    let result: CheckResult
+    return { reusableDirectory, targets, forceExternal }
+}
+
+/** CLI entry point: run the check, print a report, and set the exit code. */
+const main = (): void => {
+    let result: ContractCheckResult
+
     try {
-        result = runContractCheck({ reusableDir, targets, forceExternal })
+        result = runContractCheck(parseArguments(process.argv.slice(2)))
     } catch (error) {
         console.error((error as Error).message)
         process.exit(2)
@@ -378,7 +475,7 @@ const main = (): void => {
     console.log('Reusable workflow secret contract:')
     for (const [file, workflow] of [...result.reusable].sort()) {
         const declared = [...workflow.declared.keys()]
-        console.log(`  ${file}: ${declared.length ? declared.join(', ') : '(no secrets)'}`)
+        console.log(`  ${file}: ${declared.length > 0 ? declared.join(', ') : '(no secrets)'}`)
     }
 
     console.log(`\nCallers checked (${result.files.length}):`)
@@ -395,5 +492,7 @@ const main = (): void => {
     console.log('\nCaller contract OK.')
 }
 
-// Runs as a CLI only when it is the entry point; the self-test imports it.
-if (basename(process.argv[1] ?? '') === 'check-caller-contract.ts') main()
+/** Filenames this module runs as a CLI under; the self-test imports it instead. */
+const ENTRY_POINTS = new Set(['check-caller-contract.ts', 'check-caller-contract.js'])
+
+if (ENTRY_POINTS.has(basename(process.argv[1] ?? ''))) main()

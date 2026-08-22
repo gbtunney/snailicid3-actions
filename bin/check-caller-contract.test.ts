@@ -1,14 +1,18 @@
-// Self-test for bin/check-caller-contract.ts.
-//
-// A contract checker that never fails is worse than no checker at all, so
-// every rule gets a fixture that must trip it.
+/**
+ * Self-test for {@link file://./check-caller-contract.ts}.
+ *
+ * A contract checker that never fails is worse than no checker at all, so every
+ * rule gets a fixture that must trip it, and the baseline fixture proves the
+ * rules stay quiet on a correct pair of workflows.
+ */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { runContractCheck } from './check-caller-contract.ts'
+import { runContractCheck } from './check-caller-contract.js'
 
+/** A correct reusable workflow: one optional secret, declared and read. */
 const REUSABLE = `name: z Call Thing
 
 on:
@@ -35,6 +39,7 @@ jobs:
               run: echo "\${{ secrets.GH_PAT }}"
 `
 
+/** A correct consumer-side caller for {@link REUSABLE}. */
 const CALLER = `name: Caller
 
 on:
@@ -50,15 +55,16 @@ jobs:
             GH_PAT: \${{ secrets.GH_PAT }}
 `
 
-interface TestCase {
+/** One rule, expressed as the workflow pair that must trip it. */
+interface ContractFixture {
     name: string
     reusable: string
     caller: string
-    /** Substring the failure must mention, or null when the fixture must pass. */
+    /** Substring the failure must mention, or null when the pair must pass. */
     expect: string | null
 }
 
-const cases: TestCase[] = [
+const fixtures: ContractFixture[] = [
     {
         name: 'baseline passes',
         reusable: REUSABLE,
@@ -74,7 +80,10 @@ const cases: TestCase[] = [
     {
         name: 'forwarding an undeclared secret is rejected',
         reusable: REUSABLE,
-        caller: CALLER.replace('GH_PAT: ${{ secrets.GH_PAT }}', 'NPM_TOKEN: ${{ secrets.NPM_TOKEN }}'),
+        caller: CALLER.replace(
+            'GH_PAT: ${{ secrets.GH_PAT }}',
+            'NPM_TOKEN: ${{ secrets.NPM_TOKEN }}',
+        ),
         expect: 'does not declare',
     },
     {
@@ -99,6 +108,26 @@ const cases: TestCase[] = [
         expect: 'never reads it',
     },
     {
+        // Documentation comments naming a secret are common in these files, so
+        // a comment-blind scan would quietly retire the unread-secret rule.
+        name: 'a secret named only in a comment still counts as unread',
+        reusable: REUSABLE.replace(
+            'jobs:',
+            '# Callers may set GH_PAT; it reaches steps as ${{ secrets.GH_PAT }}.\njobs:',
+        ).replace('run: echo "${{ secrets.GH_PAT }}"', 'run: echo "nothing secret here"'),
+        caller: CALLER,
+        expect: 'never reads it',
+    },
+    {
+        name: 'a trailing comment naming a secret does not count as a read',
+        reusable: REUSABLE.replace(
+            'run: echo "${{ secrets.GH_PAT }}"',
+            'run: echo "nothing secret here" # not a use of ${{ secrets.GH_PAT }}',
+        ),
+        caller: CALLER,
+        expect: 'never reads it',
+    },
+    {
         name: 'a consumer-side local workflow ref is rejected',
         reusable: REUSABLE,
         caller: CALLER.replace(
@@ -113,51 +142,62 @@ const cases: TestCase[] = [
             '        secrets:\n            GH_PAT:',
             '        secrets:\n            CHROMATIC_PROJECT_TOKEN:\n                description: Chromatic.\n                required: false\n            GH_PAT:',
         ).replace('secrets.GH_PAT', 'secrets.GH_PAT }} ${{ secrets.CHROMATIC_PROJECT_TOKEN'),
-        caller: CALLER.replace('        secrets:', '        with:\n            run_chromatic: true\n        secrets:'),
+        caller: CALLER.replace(
+            '        secrets:',
+            '        with:\n            run_chromatic: true\n        secrets:',
+        ),
         expect: 'does not forward CHROMATIC_PROJECT_TOKEN',
     },
     {
         name: 'granting fewer permissions than the called workflow declares is rejected',
         reusable: REUSABLE,
-        caller: CALLER.replace('permissions:\n    contents: write', 'permissions:\n    contents: read'),
+        caller: CALLER.replace(
+            'permissions:\n    contents: write',
+            'permissions:\n    contents: read',
+        ),
         expect: 'but call-thing.yml declares contents: write',
     },
 ]
 
-let failures = 0
-
-for (const testCase of cases) {
+/** Run one fixture in a throwaway directory and report whether it behaved. */
+const runFixture = (fixture: ContractFixture): boolean => {
     const root = mkdtempSync(join(tmpdir(), 'caller-contract-'))
+
     try {
         mkdirSync(join(root, 'reusable'), { recursive: true })
         mkdirSync(join(root, 'callers'), { recursive: true })
-        writeFileSync(join(root, 'reusable', 'call-thing.yml'), testCase.reusable)
-        writeFileSync(join(root, 'callers', 'caller.yml'), testCase.caller)
+        writeFileSync(join(root, 'reusable', 'call-thing.yml'), fixture.reusable)
+        writeFileSync(join(root, 'callers', 'caller.yml'), fixture.caller)
 
         const { problems } = runContractCheck({
-            reusableDir: join(root, 'reusable'),
+            reusableDirectory: join(root, 'reusable'),
             targets: [join(root, 'callers')],
             forceExternal: true,
         })
 
-        const ok = testCase.expect
-            ? problems.some((problem) => problem.includes(testCase.expect!))
+        const passed = fixture.expect
+            ? problems.some((problem) => problem.includes(fixture.expect!))
             : problems.length === 0
 
-        console.log(`${ok ? 'ok  ' : 'FAIL'}  ${testCase.name}`)
-        if (!ok) {
-            failures++
-            console.log(`        expected: ${testCase.expect ?? '(no problems)'}`)
-            console.log(`        got: ${problems.length ? problems.join('\n        ') : '(no problems)'}`)
+        console.log(`${passed ? 'ok  ' : 'FAIL'}  ${fixture.name}`)
+        if (!passed) {
+            console.log(`        expected: ${fixture.expect ?? '(no problems)'}`)
+            console.log(
+                `        got: ${problems.length > 0 ? problems.join('\n             ') : '(no problems)'}`,
+            )
         }
+
+        return passed
     } finally {
         rmSync(root, { recursive: true, force: true })
     }
 }
 
-if (failures > 0) {
-    console.error(`\n${failures} contract-checker self-test(s) failed.`)
+const failures = fixtures.filter((fixture) => !runFixture(fixture))
+
+if (failures.length > 0) {
+    console.error(`\n${failures.length} contract-checker self-test(s) failed.`)
     process.exit(1)
 }
 
-console.log(`\nAll ${cases.length} contract-checker self-tests passed.`)
+console.log(`\nAll ${fixtures.length} contract-checker self-tests passed.`)
