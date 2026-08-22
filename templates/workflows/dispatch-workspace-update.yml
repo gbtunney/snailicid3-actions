@@ -31,8 +31,7 @@ on:
                     Update pnpm-lock.yaml as needed to satisfy the manifests
                     (pnpm install --no-frozen-lockfile) and commit the result. This is not a reset:
                     the existing lockfile is updated, not deleted and re-resolved from scratch.
-                    Leave off and a stale lockfile fails the run instead of being rewritten
-                    silently.
+                    Leave off and a stale lockfile fails the run instead of being rewritten silently.
                 required: true
                 default: false
                 type: boolean
@@ -50,8 +49,6 @@ on:
                 default: workspace update
                 type: string
 
-# Workflow-level floor. Only the apply job commits and pushes, so only it
-# elevates; the guard and pipeline jobs run with a read token.
 permissions:
     contents: read
 
@@ -95,14 +92,13 @@ jobs:
         name: Run selected pipeline routines
         needs: guard
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
-        # No secrets: call-pipeline.yml declares none.
         with:
             mode: report
             check_mode: ${{ inputs.run_fix && 'fix' || 'skip' }}
             lockfile_mode: ${{ inputs.repair_lockfile && 'reconcile' || 'frozen' }}
-            run_build: false
-            run_test: false
-            run_docs_build: ${{ inputs.run_docs }}
+            build_mode: skip
+            test_mode: skip
+            docs_mode: ${{ inputs.run_docs && 'report' || 'skip' }}
             api_report_mode: ${{ inputs.run_api_report && 'update' || 'skip' }}
             require_clean_repo: false
             upload_workspace_artifact: true
@@ -118,10 +114,6 @@ jobs:
             id-token: write
         uses: gbtunney/snailicid3-actions/.github/workflows/call-apply-workspace-artifact.yml@v1
         secrets:
-            # Optional. Pushing with GH_PAT instead of github.token lets the
-            # committed change trigger follow-up workflows. NPM_TOKEN is not
-            # forwarded: this caller passes no post_overlay_command, so nothing
-            # here authenticates to npm.
             GH_PAT: ${{ secrets.GH_PAT }}
         with:
             ref: ${{ github.ref_name }}
