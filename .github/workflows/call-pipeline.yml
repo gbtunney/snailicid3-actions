@@ -51,19 +51,19 @@ on:
             build_mode:
                 description: Build behavior — skip, report, or abort_on_error.
                 required: false
-                default: ''
+                default: report
                 type: string
 
             test_mode:
                 description: Test behavior — skip, report, or abort_on_error.
                 required: false
-                default: ''
+                default: skip
                 type: string
 
             docs_mode:
                 description: Docs-build behavior — skip, report, or abort_on_error.
                 required: false
-                default: ''
+                default: skip
                 type: string
 
             require_clean_repo:
@@ -88,40 +88,6 @@ on:
                 description: Node version for compatibility-sensitive callers such as the smoke matrix.
                 required: false
                 default: '24'
-                type: string
-
-            # Transitional compatibility for already-published callers. New
-            # templates use build_mode/test_mode/docs_mode. These aliases let
-            # call-release-plan.yml and older @main callers migrate without a
-            # startup-breaking flag day.
-            run_build:
-                description: Deprecated compatibility alias for build_mode.
-                required: false
-                default: true
-                type: boolean
-
-            run_test:
-                description: Deprecated compatibility alias for test_mode.
-                required: false
-                default: false
-                type: boolean
-
-            run_docs_build:
-                description: Deprecated compatibility alias for docs_mode.
-                required: false
-                default: false
-                type: boolean
-
-            pnpm_cache:
-                description: Deprecated compatibility input; retained until nested callers are migrated.
-                required: false
-                default: true
-                type: boolean
-
-            disable_nx_cloud:
-                description: Deprecated compatibility input; repository policy moves to #13.
-                required: false
-                default: vars
                 type: string
 
         outputs:
@@ -168,7 +134,7 @@ jobs:
             - uses: actions/setup-node@v7
               with:
                   node-version: ${{ inputs.node_version }}
-                  cache: ${{ inputs.pnpm_cache && 'pnpm' || '' }}
+                  cache: pnpm
                   cache-dependency-path: pnpm-lock.yaml
 
             - name: Validate pipeline policy
@@ -196,54 +162,21 @@ jobs:
                     *) echo "::error::Invalid lockfile_mode: ${{ inputs.lockfile_mode }}. Expected frozen or reconcile."; exit 1 ;;
                   esac
 
-                  case "${{ inputs.disable_nx_cloud }}" in
-                    vars|true|false) ;;
-                    *) echo "::error::Invalid disable_nx_cloud: ${{ inputs.disable_nx_cloud }}. Expected vars, true, or false."; exit 1 ;;
-                  esac
-
-            - name: Resolve routine modes
-              id: routines
-              shell: bash
-              run: |
-                  set -euo pipefail
-
-                  build_mode="${{ inputs.build_mode }}"
-                  test_mode="${{ inputs.test_mode }}"
-                  docs_mode="${{ inputs.docs_mode }}"
-
-                  if [[ -z "$build_mode" ]]; then
-                    build_mode="${{ inputs.run_build && inputs.mode || 'skip' }}"
-                  fi
-                  if [[ -z "$test_mode" ]]; then
-                    test_mode="${{ inputs.run_test && inputs.mode || 'skip' }}"
-                  fi
-                  if [[ -z "$docs_mode" ]]; then
-                    docs_mode="${{ inputs.run_docs_build && inputs.mode || 'skip' }}"
-                  fi
-
-                  for routine_mode in "$build_mode" "$test_mode" "$docs_mode"; do
+                  for routine_mode in "${{ inputs.build_mode }}" "${{ inputs.test_mode }}" "${{ inputs.docs_mode }}"; do
                     case "$routine_mode" in
                       skip|report|abort_on_error) ;;
                       *) echo "::error::Invalid routine mode: $routine_mode. Expected skip, report, or abort_on_error."; exit 1 ;;
                     esac
                   done
 
-                  echo "build_mode=$build_mode" >> "$GITHUB_OUTPUT"
-                  echo "test_mode=$test_mode" >> "$GITHUB_OUTPUT"
-                  echo "docs_mode=$docs_mode" >> "$GITHUB_OUTPUT"
-
             - name: Resolve Nx Cloud policy
               id: nx_cloud_policy
               shell: bash
               run: |
                   set -euo pipefail
-                  input_value="${{ inputs.disable_nx_cloud }}"
-                  if [[ "$input_value" == "vars" ]]; then
-                    input_value="${{ vars.DISABLE_NX_CLOUD || 'true' }}"
-                  fi
-                  value="$(printf '%s' "$input_value" | tr '[:upper:]' '[:lower:]')"
+                  value="$(printf '%s' "${{ vars.DISABLE_NX_CLOUD || 'true' }}" | tr '[:upper:]' '[:lower:]')"
                   if [[ "$value" != "true" && "$value" != "false" ]]; then
-                    echo "::warning::Invalid Nx Cloud policy '$value'; defaulting to true."
+                    echo "::warning::Invalid vars.DISABLE_NX_CLOUD value '$value'; defaulting to true."
                     value="true"
                   fi
                   echo "disabled=$value" >> "$GITHUB_OUTPUT"
@@ -263,9 +196,9 @@ jobs:
                     echo "- check_mode: \`${{ inputs.check_mode }}\`"
                     echo "- api_report_mode: \`${{ inputs.api_report_mode }}\`"
                     echo "- lockfile_mode: \`${{ inputs.lockfile_mode }}\`"
-                    echo "- build_mode: \`${{ steps.routines.outputs.build_mode }}\`"
-                    echo "- test_mode: \`${{ steps.routines.outputs.test_mode }}\`"
-                    echo "- docs_mode: \`${{ steps.routines.outputs.docs_mode }}\`"
+                    echo "- build_mode: \`${{ inputs.build_mode }}\`"
+                    echo "- test_mode: \`${{ inputs.test_mode }}\`"
+                    echo "- docs_mode: \`${{ inputs.docs_mode }}\`"
                     echo "- require_clean_repo: \`${{ inputs.require_clean_repo }}\`"
                     echo "- upload_workspace_artifact: \`${{ inputs.upload_workspace_artifact }}\`"
                     echo "- Nx Cloud disabled: \`${{ steps.nx_cloud_policy.outputs.disabled }}\`"
@@ -340,18 +273,18 @@ jobs:
               run: pnpm exec nx report
 
             - name: Run build
-              if: ${{ steps.routines.outputs.build_mode != 'skip' }}
-              continue-on-error: ${{ steps.routines.outputs.build_mode == 'report' }}
+              if: ${{ inputs.build_mode != 'skip' }}
+              continue-on-error: ${{ inputs.build_mode == 'report' }}
               run: pnpm build
 
             - name: Run test
-              if: ${{ steps.routines.outputs.test_mode != 'skip' }}
-              continue-on-error: ${{ steps.routines.outputs.test_mode == 'report' }}
+              if: ${{ inputs.test_mode != 'skip' }}
+              continue-on-error: ${{ inputs.test_mode == 'report' }}
               run: pnpm test
 
             - name: Run docs build
-              if: ${{ steps.routines.outputs.docs_mode != 'skip' }}
-              continue-on-error: ${{ steps.routines.outputs.docs_mode == 'report' }}
+              if: ${{ inputs.docs_mode != 'skip' }}
+              continue-on-error: ${{ inputs.docs_mode == 'report' }}
               run: pnpm run docs:build
 
             - name: Run fix routine
