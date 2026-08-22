@@ -119,9 +119,10 @@ Behavior is controlled by explicit workflow inputs, following the repo
 pattern: every `call-*` input has a matching `dispatch-*` input for manual
 runs, and the triggered callers (`pr-checks`, `push-*`) pass the same inputs
 with values written in the file. The only repo-specific line is
-`run_chromatic:` in `pr-checks`/`push-main` — `bin/sync-callers.sh --chromatic`
-sets it to `true` during sync for repos that use Chromatic. Secrets
-(`CHROMATIC_PROJECT_TOKEN`, `NPM_TOKEN`, `GH_PAT`) are forwarded by name from
+`chromatic_mode:` in `pr-checks`/`push-main` — `bin/sync-callers.sh --chromatic`
+turns it from `skip` to `abort_on_error` during sync for repos that use
+Chromatic. Secrets
+(the Chromatic project tokens, `NPM_TOKEN`, `GH_PAT`) are forwarded by name from
 each caller job to the workflow that declares them, so a template only names
 the secrets that template's calls actually consume; the `DISABLE_NX_CLOUD`
 repository variable remains the one vars-based switch (pre-existing Nx Cloud
@@ -129,18 +130,23 @@ policy).
 
 ### Chromatic
 
-`call-pipeline.yml` can run Chromatic visual tests. It executes
-`pnpm exec nx run-many -t chromatic`, which runs each project's `chromatic`
-package.json script (Nx infers scripts as targets); projects without one are
-skipped, so it is safe to enable repo-wide.
+`call-pipeline.yml` owns only whether Chromatic runs and what a failure costs
+— `chromatic_mode: skip | report | abort_on_error`. Each Storybook project owns
+its own project token and its own Chromatic CLI flags.
+
+Every declared token is exported before a single
+`pnpm exec nx run-many -t chromatic`, so projects with **different** tokens all
+publish from one invocation; projects without a `chromatic` target are skipped
+by Nx. This replaces the per-project matrix job a multi-Storybook repo needed
+when the pipeline injected one global token.
 
 Requirements in the calling repository:
 
-1. A `chromatic` script in each Storybook project's package.json that reads
-   `$CHROMATIC_PROJECT_TOKEN` (see `@gbt/template-example-react`).
-2. The `CHROMATIC_PROJECT_TOKEN` repository secret (from the Chromatic project
-   settings page) — the only secret Chromatic needs.
-3. Pass the flag and the secret when calling the pipeline:
+1. A `chromatic` target in each Storybook project that reads its own token
+   variable and carries its own flags, e.g.
+   `chromatic --project-token=$CHROMATIC_GBT_SCOPE_PROJECT_TOKEN --exit-once-uploaded`.
+2. That token as a repository secret, from the Chromatic project settings page.
+3. A mode and the named token(s) when calling the pipeline:
 
 ```yaml
 jobs:
@@ -149,18 +155,24 @@ jobs:
       contents: read
     uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
     secrets:
-      CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+      CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
+      CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
     with:
       run_build: true
       run_test: true
-      run_chromatic: true
+      chromatic_mode: abort_on_error
 ```
 
+The token inventory `call-pipeline.yml` declares is explicit — a reusable
+workflow can only declare secrets by literal name — so a new Storybook project
+adds one declaration there and re-tags `v1`. See
+[`templates/README.md`](templates/README.md) for the full contract.
+
 Repositories that don't need Chromatic (e.g. snailicid3) keep
-`run_chromatic: false` in their callers (the template default). Manual runs:
-`dispatch-pipeline` exposes `run_chromatic` as a checkbox, so Chromatic can be
-triggered and tested by hand in any repo with the secret set, independent of
-what the triggered callers do.
+`chromatic_mode: skip` in their callers (the template default). Manual runs:
+`dispatch-pipeline` exposes `chromatic_mode` as a dropdown, so Chromatic can be
+triggered and tested by hand in any repo with a token set, independent of what
+the triggered callers do.
 
 ## Commit message convention
 

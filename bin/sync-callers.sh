@@ -9,9 +9,9 @@ set -euo pipefail
 # Usage:
 #   bin/sync-callers.sh [--chromatic] [--check] <path-to-consumer-repo> [<path> ...]
 #
-# --chromatic flips run_chromatic to true in the synced pr-checks and
-# push-main callers, for repos whose projects have a chromatic script
-# (requires the CHROMATIC_PROJECT_TOKEN repository secret).
+# --chromatic turns chromatic_mode from skip to abort_on_error in the synced
+# pr-checks and push-main callers, for repos whose projects have a chromatic
+# target (requires that project's named token as a repository secret).
 #
 # --check writes nothing and exits non-zero if a consumer workflow has
 # drifted from its template, or if a consumer still carries a synced workflow
@@ -84,7 +84,7 @@ render() {
         # Drop the template's own header block (first comment ruler pair).
         awk 'BEGIN{skip=1} skip && /^# ─/{count++; if(count==2){skip=0}; next} skip && /^#/{next} {print}' "$template"
     } | if [[ "$ENABLE_CHROMATIC" == "true" && ("$name" == "pr-checks.yml" || "$name" == "push-main.yml") ]]; then
-        sed 's/run_chromatic: false/run_chromatic: true/'
+        sed 's/chromatic_mode: skip/chromatic_mode: abort_on_error/'
     else
         cat
     fi

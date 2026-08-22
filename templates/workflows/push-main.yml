@@ -25,10 +25,13 @@ jobs:
         name: required
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
         secrets:
-            # Optional; only read when run_chromatic is true.
-            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+            # Optional; read only when chromatic_mode is not skip. Forward the
+            # token(s) this repository's Storybook projects actually read.
+            CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
+            CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
+            CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN: ${{ secrets.CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN }}
         with:
-            run_chromatic: false
+            chromatic_mode: skip
             mode: abort_on_error
             check_mode: check
             require_lockfile: true

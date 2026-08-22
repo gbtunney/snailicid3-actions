@@ -70,11 +70,15 @@ on:
                 required: true
                 default: false
                 type: boolean
-            run_chromatic:
-                description: Run Chromatic visual tests (requires CHROMATIC_PROJECT_TOKEN secret)
+            chromatic_mode:
+                description: Chromatic step policy (needs a project token unless skip)
                 required: true
-                default: false
-                type: boolean
+                default: skip
+                type: choice
+                options:
+                    - skip
+                    - report
+                    - abort_on_error
 
             node_version:
                 description: Node version to run
@@ -130,8 +134,11 @@ jobs:
     pipeline:
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
         secrets:
-            # Optional; only read when run_chromatic is true.
-            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+            # Optional; read only when chromatic_mode is not skip. Forward the
+            # token(s) this repository's Storybook projects actually read.
+            CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
+            CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
+            CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN: ${{ secrets.CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN }}
         with:
             mode: ${{ inputs.mode }}
             check_mode: ${{ inputs.check_mode }}
@@ -142,7 +149,7 @@ jobs:
             run_build: ${{ inputs.run_build }}
             run_test: ${{ inputs.run_test }}
             run_docs_build: ${{ inputs.run_docs_build }}
-            run_chromatic: ${{ inputs.run_chromatic }}
+            chromatic_mode: ${{ inputs.chromatic_mode }}
             node_version: ${{ inputs.node_version }}
             nx_cache_reset: ${{ inputs.nx_cache_reset }}
             pnpm_cache: ${{ inputs.pnpm_cache }}

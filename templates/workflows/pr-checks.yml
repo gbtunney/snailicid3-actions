@@ -53,10 +53,13 @@ jobs:
         if: ${{ needs.detect.outputs.should_version == 'true' }}
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
         secrets:
-            # Optional; only read when run_chromatic is true.
-            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+            # Optional; read only when chromatic_mode is not skip. Forward the
+            # token(s) this repository's Storybook projects actually read.
+            CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
+            CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
+            CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN: ${{ secrets.CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN }}
         with:
-            run_chromatic: false
+            chromatic_mode: skip
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
             mode: abort_on_error
             check_mode: check
@@ -74,10 +77,13 @@ jobs:
         if: ${{ needs.detect.outputs.should_publish == 'true' }}
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
         secrets:
-            # Optional; only read when run_chromatic is true.
-            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+            # Optional; read only when chromatic_mode is not skip. Forward the
+            # token(s) this repository's Storybook projects actually read.
+            CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
+            CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
+            CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN: ${{ secrets.CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN }}
         with:
-            run_chromatic: false
+            chromatic_mode: skip
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
             mode: abort_on_error
             check_mode: check
@@ -95,10 +101,13 @@ jobs:
         if: ${{ needs.detect.outputs.should_skip == 'true' }}
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
         secrets:
-            # Optional; only read when run_chromatic is true.
-            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+            # Optional; read only when chromatic_mode is not skip. Forward the
+            # token(s) this repository's Storybook projects actually read.
+            CHROMATIC_GBT_SCOPE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_GBT_SCOPE_PROJECT_TOKEN }}
+            CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN: ${{ secrets.CHROMATIC_VIDEO_INTELLIGENCE_PROJECT_TOKEN }}
+            CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN: ${{ secrets.CHROMATIC_TEMPLATE_EXAMPLE_REACT_PROJECT_TOKEN }}
         with:
-            run_chromatic: false
+            chromatic_mode: skip
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
             mode: abort_on_error
             check_mode: check

@@ -23,10 +23,10 @@ on:
                 required: false
 
         inputs:
-            run_chromatic:
+            chromatic_mode:
                 required: false
-                default: false
-                type: boolean
+                default: skip
+                type: string
 
 permissions:
     contents: write
@@ -54,6 +54,24 @@ jobs:
         secrets:
             GH_PAT: \${{ secrets.GH_PAT }}
 `
+
+/** A reusable workflow with two named Chromatic project tokens, as the real one has. */
+const CHROMATIC_REUSABLE = REUSABLE.replace(
+    '            GH_PAT:\n',
+    [
+        '            CHROMATIC_ALPHA_PROJECT_TOKEN:',
+        '                description: Token for alpha.',
+        '                required: false',
+        '            CHROMATIC_BETA_PROJECT_TOKEN:',
+        '                description: Token for beta.',
+        '                required: false',
+        '            GH_PAT:',
+        '',
+    ].join('\n'),
+).replace(
+    'run: echo "${{ secrets.GH_PAT }}"',
+    'run: echo "${{ secrets.GH_PAT }} ${{ secrets.CHROMATIC_ALPHA_PROJECT_TOKEN }} ${{ secrets.CHROMATIC_BETA_PROJECT_TOKEN }}"',
+)
 
 /** One rule, expressed as the workflow pair that must trip it. */
 interface ContractFixture {
@@ -139,16 +157,49 @@ const fixtures: ContractFixture[] = [
         expect: 'a consumer repository has no such file',
     },
     {
-        name: 'run_chromatic without the token is rejected',
-        reusable: REUSABLE.replace(
-            '        secrets:\n            GH_PAT:',
-            '        secrets:\n            CHROMATIC_PROJECT_TOKEN:\n                description: Chromatic.\n                required: false\n            GH_PAT:',
-        ).replace('secrets.GH_PAT', 'secrets.GH_PAT }} ${{ secrets.CHROMATIC_PROJECT_TOKEN'),
+        name: 'enabling chromatic without forwarding any project token is rejected',
+        reusable: CHROMATIC_REUSABLE,
         caller: CALLER.replace(
             '        secrets:',
-            '        with:\n            run_chromatic: true\n        secrets:',
+            '        with:\n            chromatic_mode: abort_on_error\n        secrets:',
         ),
-        expect: 'does not forward CHROMATIC_PROJECT_TOKEN',
+        expect: 'forwards none of CHROMATIC_ALPHA_PROJECT_TOKEN, CHROMATIC_BETA_PROJECT_TOKEN',
+    },
+    {
+        name: 'forwarding one of several project tokens is enough',
+        reusable: CHROMATIC_REUSABLE,
+        caller: CALLER.replace(
+            '        secrets:\n            GH_PAT: ${{ secrets.GH_PAT }}',
+            '        with:\n            chromatic_mode: report\n        secrets:\n            GH_PAT: ${{ secrets.GH_PAT }}\n            CHROMATIC_BETA_PROJECT_TOKEN: ${{ secrets.CHROMATIC_BETA_PROJECT_TOKEN }}',
+        ),
+        expect: null,
+    },
+    {
+        name: 'chromatic_mode: skip needs no project token',
+        reusable: CHROMATIC_REUSABLE,
+        caller: CALLER.replace(
+            '        secrets:',
+            '        with:\n            chromatic_mode: skip\n        secrets:',
+        ),
+        expect: null,
+    },
+    {
+        name: 'an unknown chromatic_mode is rejected',
+        reusable: CHROMATIC_REUSABLE,
+        caller: CALLER.replace(
+            '        secrets:',
+            '        with:\n            chromatic_mode: true\n        secrets:',
+        ),
+        expect: 'which is not one of skip, report, abort_on_error',
+    },
+    {
+        name: 'an expression chromatic_mode is left to runtime',
+        reusable: CHROMATIC_REUSABLE,
+        caller: CALLER.replace(
+            '        secrets:',
+            '        with:\n            chromatic_mode: ${{ inputs.chromatic_mode }}\n        secrets:',
+        ),
+        expect: null,
     },
     {
         name: 'granting fewer permissions than the called workflow declares is rejected',

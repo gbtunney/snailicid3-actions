@@ -448,8 +448,8 @@ jobs:
         needs: [detect, plan, guard_real_release]
         if: ${{ always() && inputs.run_pipeline == true && needs.detect.outputs.should_publish == 'true' && (inputs.dry_run == true || needs.guard_real_release.result == 'success') }}
         uses: ./.github/workflows/call-pipeline.yml
-        # No secrets: this call leaves run_chromatic at its default (false),
-        # so the pipeline never reads CHROMATIC_PROJECT_TOKEN.
+        # No secrets: this call leaves chromatic_mode at its default (skip),
+        # so the pipeline reads no Chromatic project token.
         with:
             mode: abort_on_error
             check_mode: check
