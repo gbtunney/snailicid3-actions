@@ -141,12 +141,13 @@ jobs:
                   # Widen a devDependency range so the lockfile no longer
                   # matches the manifest — exactly the condition the old
                   # relaxed-install fallback used to paper over silently.
-                  node -e '
-                      const fs = require("node:fs")
+                  node --input-type=module -e '
+                      import { readFileSync, writeFileSync } from "node:fs"
+
                       const manifestPath = process.argv[1] + "/package.json"
-                      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+                      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
                       manifest.devDependencies.prettier = "^3.0.0"
-                      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 4) + "\n")
+                      writeFileSync(manifestPath, JSON.stringify(manifest, null, 4) + "\n")
                   ' "$work"
 
                   before="$(shasum -a 256 "$work/pnpm-lock.yaml" | cut -d' ' -f1)"

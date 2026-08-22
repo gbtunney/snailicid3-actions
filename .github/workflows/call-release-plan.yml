@@ -86,8 +86,9 @@ on:
             lockfile_mode:
                 description: >
                     How the install treats pnpm-lock.yaml. frozen fails when the lockfile no longer
-                    satisfies the manifests; reconcile updates it to satisfy them (a repair, not a
-                    reset).
+                    satisfies the manifests; reconcile updates the existing lockfile as needed to
+                    satisfy them. reconcile is not a reset: it does not delete the lockfile and
+                    resolve from scratch.
                 required: false
                 default: frozen
                 type: string
@@ -157,6 +158,17 @@ jobs:
             release_phase: ${{ steps.phase.outputs.release_phase }}
 
         steps:
+            # A public input that silently falls through to frozen would hide a
+            # typo in a caller until someone wondered why repair never ran.
+            - name: Validate lockfile mode
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  case "${{ inputs.lockfile_mode }}" in
+                    frozen|reconcile) ;;
+                    *) echo "::error::Invalid lockfile_mode: ${{ inputs.lockfile_mode }}. Expected frozen or reconcile."; exit 1 ;;
+                  esac
+
             - name: Decide release phase
               id: phase
               shell: bash

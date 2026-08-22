@@ -156,7 +156,7 @@ workflow that installs takes `lockfile_mode`:
 | `lockfile_mode` | Behaviour |
 | --- | --- |
 | `frozen` (default) | `pnpm install --frozen-lockfile`. A lockfile that no longer satisfies the manifests fails the run, with an error naming the repair route. Nothing is rewritten. |
-| `reconcile` | `pnpm install --no-frozen-lockfile`. The lockfile is updated to satisfy the manifests — a repair, not a reset: nothing already pinned is re-resolved and nothing is upgraded. |
+| `reconcile` | `pnpm install --no-frozen-lockfile`. The existing lockfile is updated as needed to satisfy the manifests. Not a reset: the lockfile is not deleted and resolved from scratch. |
 
 This replaces an implicit fallback. The pipeline used to try a frozen install
 and, on failure, silently retry unfrozen — so ordinary PR and release

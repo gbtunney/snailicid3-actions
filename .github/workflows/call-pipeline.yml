@@ -45,9 +45,9 @@ on:
                 description: >
                     How the install treats pnpm-lock.yaml. frozen installs exactly what the lockfile
                     says and fails when it no longer satisfies the manifests — validation never
-                    rewrites it. reconcile runs a non-frozen install, which updates the lockfile to
-                    satisfy the manifests; that is a repair, not a reset, and it re-resolves nothing
-                    that is already pinned.
+                    rewrites it. reconcile runs a non-frozen install, which updates the existing
+                    lockfile as needed to satisfy the manifests. reconcile is not a reset: it does
+                    not delete the lockfile and resolve from scratch.
                 required: false
                 default: frozen
                 type: string
@@ -255,7 +255,10 @@ jobs:
                     exit 0
                   fi
 
-                  echo "::error::pnpm install --frozen-lockfile failed: pnpm-lock.yaml no longer satisfies the manifests. Validation does not rewrite the lockfile. To reconcile it deliberately, run Workspace Update with repair_lockfile enabled, or call this workflow with lockfile_mode: reconcile."
+                  # pnpm's own error is above and is the diagnosis. A frozen
+                  # install also fails on registry, auth and network problems,
+                  # so the hint below is conditional rather than a verdict.
+                  echo "::error::pnpm install --frozen-lockfile failed — see pnpm's error above. If it is an outdated-lockfile error, reconcile the lockfile deliberately: run Workspace Update with repair_lockfile enabled, or call this workflow with lockfile_mode: reconcile. Validation never rewrites pnpm-lock.yaml on its own."
                   exit 1
 
             - name: 📦 Install (reconcile lockfile)
