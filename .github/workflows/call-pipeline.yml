@@ -356,8 +356,15 @@ jobs:
               shell: bash
               run: |
                   ARCHIVE_PATH="${{ runner.temp }}/workspace-artifact.tar.gz"
+                  # .env files are excluded so a token written for a local or
+                  # CI Chromatic run cannot ride along into a downloadable
+                  # artifact. .gitignore does not apply here — tar does not read
+                  # it — and .env.example is git-tracked, so the overlay's own
+                  # checkout still has it.
                   tar -czf "$ARCHIVE_PATH" \
                     --exclude='.git' \
+                    --exclude='.env*' \
+                    --exclude='**/.env*' \
                     --exclude='**/node_modules' \
                     --exclude='**/.nx/cache' \
                     --exclude='**/.pnpm-store' \
