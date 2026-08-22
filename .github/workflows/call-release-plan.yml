@@ -267,7 +267,7 @@ jobs:
 
         steps:
             - name: Checkout release source
-              uses: actions/checkout@v4
+              uses: actions/checkout@v7
               with:
                   fetch-depth: 0
                   ref: ${{ inputs.ref || github.sha }}
@@ -334,7 +334,7 @@ jobs:
 
             - name: Setup Node
               if: ${{ inputs.dry_run == false }}
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@v7
               with:
                   node-version: ${{ inputs.node_version }}
                   cache: ${{ inputs.pnpm_cache && 'pnpm' || '' }}
