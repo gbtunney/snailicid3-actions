@@ -1,6 +1,15 @@
 name: z Call Apply Workspace Artifact
 
 # SOURCE: gbtunney/snailicid3-actions
+#
+# Secrets contract:
+#   Both secrets are optional and forwarded by name from the caller — see
+#   templates/README.md.
+#
+#     GH_PAT     checkout/push token, so a pushed commit can trigger follow-up
+#                workflows; falls back to github.token when empty.
+#     NPM_TOKEN  exported as NODE_AUTH_TOKEN for post_overlay_command only.
+#                A caller that passes no post_overlay_command never needs it.
 
 on:
     workflow_call:

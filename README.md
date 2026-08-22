@@ -9,6 +9,12 @@ Reusable GitHub Actions and workflows for the `snailicid3` ecosystem.
 Reference these from any repository:
 
 ```yaml
+permissions:
+  contents: write
+  actions: write
+  id-token: write
+  pull-requests: write
+
 jobs:
   pipeline:
     uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
@@ -21,13 +27,24 @@ jobs:
 
   release:
     uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
-    secrets: inherit
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   apply:
     uses: gbtunney/snailicid3-actions/.github/workflows/call-apply-workspace-artifact.yml@v1
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
     with:
       artifact_name: my-artifact
 ```
+
+Callers forward secrets **by name**, never `secrets: inherit`, and must grant
+at least the permissions the called workflow declares. Get either wrong and
+GitHub refuses to start the run — `startup_failure`, zero jobs, nothing to
+read. Both rules, and the secret each workflow actually consumes, are in
+[`templates/README.md`](templates/README.md); `bin/check-caller-contract.mjs`
+enforces them on every PR.
 
 ### Composite Actions
 
@@ -60,7 +77,9 @@ GitHub can only share `workflow_call` workflows across repositories — the thin
 trigger workflows (`dispatch-*`, `pr-checks`, `push-main`, `push-release`) must
 physically exist in every repo. The canonical copies live in
 [`templates/workflows/`](templates/workflows/): to onboard or update a repo,
-copy them into `<your-repo>/.github/workflows/` verbatim.
+copy them into `<your-repo>/.github/workflows/` verbatim. The contract those
+callers have to honour is documented in
+[`templates/README.md`](templates/README.md).
 
 ```sh
 cp path/to/snailicid3-actions/templates/workflows/*.yml .github/workflows/
@@ -71,6 +90,7 @@ To stamp all local clones at once, use the sync script:
 ```sh
 bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
 bin/sync-callers.sh --chromatic ../gbt-monorepov2
+bin/sync-callers.sh --check ../snailicid3   # writes nothing; fails on drift
 ```
 
 **Planned (not yet built): auto-PR sync.** Once the template set stabilizes, a
@@ -88,9 +108,11 @@ runs, and the triggered callers (`pr-checks`, `push-*`) pass the same inputs
 with values written in the file. The only repo-specific line is
 `run_chromatic:` in `pr-checks`/`push-main` — `bin/sync-callers.sh --chromatic`
 sets it to `true` during sync for repos that use Chromatic. Secrets
-(`CHROMATIC_PROJECT_TOKEN`, `NPM_TOKEN`, `GH_PAT`) flow through
-`secrets: inherit`; the `DISABLE_NX_CLOUD` repository variable remains the one
-vars-based switch (pre-existing Nx Cloud policy).
+(`CHROMATIC_PROJECT_TOKEN`, `NPM_TOKEN`, `GH_PAT`) are forwarded by name from
+each caller job to the workflow that declares them, so a template only names
+the secrets that template's calls actually consume; the `DISABLE_NX_CLOUD`
+repository variable remains the one vars-based switch (pre-existing Nx Cloud
+policy).
 
 ### Chromatic
 
@@ -111,7 +133,8 @@ Requirements in the calling repository:
 jobs:
   pipeline:
     uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
-    secrets: inherit
+    secrets:
+      CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
     with:
       run_build: true
       run_test: true
@@ -166,7 +189,29 @@ workspace (the root `package.json`, which depends on the published
   `should_skip=true`),
 - `call-apply-workspace-artifact.yml` (overlaying a generated artifact and
   asserting dirty-state detection),
-- `scope-commit` message derivation.
+- `call-release-plan.yml` in dry-run mode,
+- `scope-commit` message derivation,
+- the caller contract (`bin/check-caller-contract.mjs`) against the reusable
+  workflows, the templates, and a consumer synced fresh from those templates —
+  plus `bin/check-caller-contract.test.mjs`, which proves the checker still
+  rejects each mistake it claims to catch.
+
+### Cross-repository smoke
+
+Same-repository refs cannot reach the boundary that breaks consumers: a remote
+`<owner>/<repo>/...@<ref>` call, where a wrong secret or permission contract
+makes GitHub refuse to start the run (`startup_failure`, zero jobs) instead of
+failing a job. Two workflows call the reusable workflows through that remote
+path, read-only:
+
+- **Smoke Cross-Repo (main)** — on pushes to `main` that touch workflows or
+  templates, and on demand.
+- **Smoke Cross-Repo (v1)** — weekly and on demand, against the tag consumers
+  pin. Dispatch it after moving `v1`.
+
+They are separate files from `test-actions.yml`, and from each other, because a
+startup failure takes down an entire run: a broken published tag must not be
+able to erase the other suites' signal.
 
 > Note: the `call-*` workflows reference composite actions with `$/`, so each
 composite action resolves from the same repository commit as the reusable

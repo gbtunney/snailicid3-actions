@@ -1,0 +1,97 @@
+# Caller workflow templates
+
+GitHub can only share `workflow_call` workflows across repositories. The thin
+trigger workflows in [`workflows/`](workflows/) (`dispatch-*`, `pr-checks`,
+`push-*`) must physically exist in every consumer repository, so these files
+are the source of truth and are copied verbatim:
+
+```sh
+bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
+bin/sync-callers.sh --chromatic ../gbt-monorepov2   # repos with a chromatic script
+bin/sync-callers.sh --check ../snailicid3           # fail on drift, write nothing
+```
+
+## The caller contract
+
+A caller that gets any of the three rules below wrong does not fail a job.
+GitHub refuses to start the run: conclusion `startup_failure`, **zero jobs**, no
+logs to read. The rules are checked statically by
+`bin/check-caller-contract.mjs` (run on every PR by `test-actions.yml`, against
+the templates *and* against freshly synced consumer copies).
+
+### 1. Forward secrets by name — never `secrets: inherit`
+
+Every reusable workflow declares the secrets it reads. Callers pass exactly
+those, by name:
+
+```yaml
+jobs:
+    release_plan:
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
+        secrets:
+            GH_PAT: ${{ secrets.GH_PAT }}
+            NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+`secrets: inherit` hands a workflow in another repository the caller's entire
+secret set through a contract nobody wrote down, and it is the one thing about
+a cross-repository call that cannot be reviewed by reading either file. Named
+forwarding is also what makes the boundary testable: the checker can compare
+what a caller sends against what the called workflow declares.
+
+Every secret is optional. An unset repository secret forwards as an empty
+string, and the reusable workflow falls back (`GH_PAT` → `github.token`) or
+skips the step that would have used it — so a repository that never publishes
+does not need `NPM_TOKEN`, and one that never runs Chromatic does not need
+`CHROMATIC_PROJECT_TOKEN`.
+
+### 2. Grant at least the permissions the called workflow declares
+
+A caller cannot grant a called workflow fewer permissions than it requests.
+Ask for less — even by leaving a scope out — and the run dies at startup.
+
+### 3. Reference reusable workflows by their full path
+
+`./.github/workflows/...` resolves against the *consumer's* checkout, where the
+file does not exist. Callers outside this repository always use
+`gbtunney/snailicid3-actions/.github/workflows/<file>.yml@v1`.
+
+## What each reusable workflow declares
+
+| Reusable workflow | Secrets | Consumed by | Permissions a caller must grant |
+| --- | --- | --- | --- |
+| `call-detect-release-state.yml` | — | read-only detection | `contents: read` |
+| `call-pipeline.yml` | `CHROMATIC_PROJECT_TOKEN` | the Chromatic step, only when `run_chromatic: true` | `contents: read` |
+| `call-apply-workspace-artifact.yml` | `GH_PAT`, `NPM_TOKEN` | `GH_PAT`: checkout/push, so a pushed commit can trigger follow-up workflows. `NPM_TOKEN`: exported as `NODE_AUTH_TOKEN` for `post_overlay_command` only | `contents: write`, `actions: read`, `id-token: write` |
+| `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` | the `dry_run: false` path only — version PR, release tags, `changeset publish` | `contents: write`, `actions: write`, `id-token: write`, `pull-requests: write` |
+
+`call-release-plan.yml` nests the other three. It forwards `GH_PAT`/`NPM_TOKEN`
+to `call-apply-workspace-artifact.yml` by name too, so a caller's grant is
+exactly what the innermost workflow can read.
+
+## What each template forwards
+
+| Template | Calls | Secrets forwarded |
+| --- | --- | --- |
+| `dispatch-release-plan.yml` | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` |
+| `push-release.yml` | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` |
+| `dispatch-workspace-update.yml` | `call-pipeline.yml`, `call-apply-workspace-artifact.yml` | `GH_PAT` (no `post_overlay_command`, so nothing reaches npm) |
+| `pr-checks.yml` | `call-detect-release-state.yml`, `call-pipeline.yml` | `CHROMATIC_PROJECT_TOKEN` |
+| `push-main.yml` | `call-pipeline.yml` | `CHROMATIC_PROJECT_TOKEN` |
+| `dispatch-pipeline.yml` | `call-pipeline.yml` | `CHROMATIC_PROJECT_TOKEN` |
+| `dispatch-smoke-matrix.yml` | `call-pipeline.yml` | — (`run_chromatic` stays false) |
+| `dispatch-release-state.yml` | `call-detect-release-state.yml` | — |
+
+## Changing the contract
+
+The reusable workflow and every caller that invokes it move together:
+
+1. Change the secret declaration in `.github/workflows/call-*.yml`.
+2. Update every template here that calls it.
+3. `node bin/check-caller-contract.mjs` — catches a template left behind.
+4. `bin/sync-callers.sh <consumer> ...` so consumers stop drifting, then
+   `bin/sync-callers.sh --check <consumer>` to confirm.
+5. After moving the `v1` tag, dispatch **Smoke Cross-Repo (v1)**. It calls the
+   published workflows through a remote ref the way a consumer does, which is
+   the only check that exercises the boundary a same-repository self-test
+   cannot reach.

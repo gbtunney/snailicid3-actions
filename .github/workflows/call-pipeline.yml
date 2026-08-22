@@ -2,6 +2,12 @@
 # WORKFLOW: Pipeline
 # TYPE: reusable (workflow_call)
 # SOURCE: gbtunney/snailicid3-actions
+#
+# Secrets contract:
+#   CHROMATIC_PROJECT_TOKEN is the only secret this workflow reads, and only
+#   when run_chromatic=true. Callers forward it by name — see
+#   templates/README.md. A caller that never enables Chromatic forwards no
+#   secrets at all.
 # ─────────────────────────────────────────────────────────────
 
 name: z Pipeline 🚰
@@ -299,7 +305,7 @@ jobs:
                   set -euo pipefail
 
                   if [[ -z "${CHROMATIC_PROJECT_TOKEN:-}" ]]; then
-                    echo "::error::run_chromatic is enabled but the CHROMATIC_PROJECT_TOKEN secret was not provided. Pass it from the caller (secrets: inherit) and set it in the repository secrets."
+                    echo "::error::run_chromatic is enabled but the CHROMATIC_PROJECT_TOKEN secret was not provided. Add CHROMATIC_PROJECT_TOKEN to the calling job's secrets: block (see templates/README.md) and set it in the repository secrets."
                     exit 1
                   fi
 
