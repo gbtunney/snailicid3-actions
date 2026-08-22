@@ -12,7 +12,7 @@ import { join } from 'node:path'
 
 import { runContractCheck } from './check-caller-contract.js'
 
-/** A correct reusable workflow: one optional secret, declared and read. */
+/** A correct reusable workflow: one optional secret and one optional input. */
 const REUSABLE = `name: z Call Thing
 
 on:
@@ -21,6 +21,12 @@ on:
             GH_PAT:
                 description: Optional token.
                 required: false
+        inputs:
+            mode:
+                description: Example caller policy.
+                required: false
+                default: report
+                type: string
 
 permissions:
     contents: write
@@ -30,7 +36,7 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Use it
-              run: echo "\${{ secrets.GH_PAT }}"
+              run: echo "\${{ secrets.GH_PAT }} \${{ inputs.mode }}"
 `
 
 /** A correct consumer-side caller for {@link REUSABLE}. */
@@ -47,6 +53,8 @@ jobs:
         uses: gbtunney/snailicid3-actions/.github/workflows/call-thing.yml@v1
         secrets:
             GH_PAT: \${{ secrets.GH_PAT }}
+        with:
+            mode: report
 `
 
 /** One rule, expressed as the workflow pair that must trip it. */
@@ -68,7 +76,7 @@ const fixtures: ContractFixture[] = [
     {
         name: 'blanket secrets: inherit is rejected',
         reusable: REUSABLE,
-        caller: CALLER.replace(/ {8}secrets:\n.*\n/s, '        secrets: inherit\n'),
+        caller: CALLER.replace(/ {8}secrets:\n.*? {8}with:/s, '        secrets: inherit\n        with:'),
         expect: 'secrets: inherit',
     },
     {
@@ -82,7 +90,7 @@ const fixtures: ContractFixture[] = [
     },
     {
         name: 'omitting a required secret is rejected',
-        reusable: REUSABLE.replace('required: false', 'required: true'),
+        reusable: REUSABLE.replace('required: false\n        inputs:', 'required: true\n        inputs:'),
         caller: CALLER.replace(/ {8}secrets:\n {12}GH_PAT.*\n/, ''),
         expect: 'required by',
     },
@@ -102,23 +110,22 @@ const fixtures: ContractFixture[] = [
         expect: 'never reads it',
     },
     {
-        /**
-         * Documentation comments naming a secret are common in these files, so
-         * a comment-blind scan would quietly retire the unread-secret rule.
-         */
         name: 'a secret named only in a comment still counts as unread',
         reusable: REUSABLE.replace(
             'jobs:',
             '# Callers may set GH_PAT; it reaches steps as ${{ secrets.GH_PAT }}.\njobs:',
-        ).replace('run: echo "${{ secrets.GH_PAT }}"', 'run: echo "nothing secret here"'),
+        ).replace(
+            'run: echo "${{ secrets.GH_PAT }} ${{ inputs.mode }}"',
+            'run: echo "${{ inputs.mode }}"',
+        ),
         caller: CALLER,
         expect: 'never reads it',
     },
     {
         name: 'a trailing comment naming a secret does not count as a read',
         reusable: REUSABLE.replace(
-            'run: echo "${{ secrets.GH_PAT }}"',
-            'run: echo "nothing secret here" # not a use of ${{ secrets.GH_PAT }}',
+            'run: echo "${{ secrets.GH_PAT }} ${{ inputs.mode }}"',
+            'run: echo "${{ inputs.mode }}" # not a use of ${{ secrets.GH_PAT }}',
         ),
         caller: CALLER,
         expect: 'never reads it',
@@ -140,6 +147,21 @@ const fixtures: ContractFixture[] = [
             'permissions:\n    contents: read',
         ),
         expect: 'but call-thing.yml declares contents: write',
+    },
+    {
+        name: 'forwarding an undeclared input is rejected',
+        reusable: REUSABLE,
+        caller: CALLER.replace('mode: report', 'legacy_mode: report'),
+        expect: 'passes input legacy_mode, which call-thing.yml does not declare',
+    },
+    {
+        name: 'omitting a required input is rejected',
+        reusable: REUSABLE.replace(
+            'description: Example caller policy.\n                required: false',
+            'description: Example caller policy.\n                required: true',
+        ),
+        caller: CALLER.replace(/ {8}with:\n {12}mode: report\n/, ''),
+        expect: 'omits input mode, required by call-thing.yml',
     },
 ]
 
