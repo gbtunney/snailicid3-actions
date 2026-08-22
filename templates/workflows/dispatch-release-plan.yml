@@ -58,14 +58,6 @@ on:
                     - '22'
                     - '24'
 
-            pnpm_cache:
-                description: Control pnpm cache usage in the validation pipeline.
-                required: true
-                default: true
-                type: boolean
-
-# Workflow-level floor. Each job elevates to exactly what it calls for, so
-# the summary job never holds a write token.
 permissions:
     contents: read
 
@@ -78,8 +70,6 @@ jobs:
             pull-requests: write
         uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
         secrets:
-            # Optional. An unset secret forwards as an empty string; the
-            # reusable workflow falls back to github.token or skips the step.
             GH_PAT: ${{ secrets.GH_PAT }}
             NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         with:
@@ -90,7 +80,6 @@ jobs:
             upload_workspace_artifact: ${{ inputs.upload_workspace_artifact }}
             lockfile_mode: ${{ inputs.lockfile_mode }}
             node_version: ${{ inputs.node_version }}
-            pnpm_cache: ${{ inputs.pnpm_cache }}
 
     summary:
         name: summarize release plan
