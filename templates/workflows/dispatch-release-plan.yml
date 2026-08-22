@@ -38,11 +38,14 @@ on:
                 default: true
                 type: boolean
 
-            require_lockfile:
-                description: Treat frozen lockfile install as required.
+            lockfile_mode:
+                description: pnpm-lock.yaml handling — frozen fails on a stale lockfile, reconcile repairs it
                 required: true
-                default: true
-                type: boolean
+                default: frozen
+                type: choice
+                options:
+                    - frozen
+                    - reconcile
 
             node_version:
                 description: Node version to run the validation pipeline with.
@@ -85,7 +88,7 @@ jobs:
             allow_non_main: ${{ inputs.allow_non_main }}
             run_pipeline: ${{ inputs.run_pipeline }}
             upload_workspace_artifact: ${{ inputs.upload_workspace_artifact }}
-            require_lockfile: ${{ inputs.require_lockfile }}
+            lockfile_mode: ${{ inputs.lockfile_mode }}
             node_version: ${{ inputs.node_version }}
             pnpm_cache: ${{ inputs.pnpm_cache }}
 

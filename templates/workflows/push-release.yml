@@ -41,6 +41,6 @@ jobs:
             allow_non_main: false
             run_pipeline: true
             upload_workspace_artifact: true
-            require_lockfile: true
+            lockfile_mode: frozen
             node_version: lts/*
             pnpm_cache: true

@@ -83,11 +83,15 @@ on:
                 default: true
                 type: boolean
 
-            require_lockfile:
-                description: Treat frozen lockfile install as required when running the validation pipeline.
+            lockfile_mode:
+                description: >
+                    How the install treats pnpm-lock.yaml. frozen fails when the lockfile no longer
+                    satisfies the manifests; reconcile updates the existing lockfile as needed to
+                    satisfy them. reconcile is not a reset: it does not delete the lockfile and
+                    resolve from scratch.
                 required: false
-                default: true
-                type: boolean
+                default: frozen
+                type: string
 
             node_version:
                 description: Node version to run the validation pipeline with. Prefer a concrete major (e.g. '24')
@@ -154,6 +158,17 @@ jobs:
             release_phase: ${{ steps.phase.outputs.release_phase }}
 
         steps:
+            # A public input that silently falls through to frozen would hide a
+            # typo in a caller until someone wondered why repair never ran.
+            - name: Validate lockfile mode
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  case "${{ inputs.lockfile_mode }}" in
+                    frozen|reconcile) ;;
+                    *) echo "::error::Invalid lockfile_mode: ${{ inputs.lockfile_mode }}. Expected frozen or reconcile."; exit 1 ;;
+                  esac
+
             - name: Decide release phase
               id: phase
               shell: bash
@@ -345,10 +360,10 @@ jobs:
               run: |
                   set -euo pipefail
 
-                  if [[ "${{ inputs.require_lockfile }}" == "true" ]]; then
-                    pnpm install --frozen-lockfile
-                  else
+                  if [[ "${{ inputs.lockfile_mode }}" == "reconcile" ]]; then
                     pnpm install --no-frozen-lockfile
+                  else
+                    pnpm install --frozen-lockfile
                   fi
 
             - name: Version packages
@@ -452,7 +467,7 @@ jobs:
         with:
             mode: abort_on_error
             check_mode: check
-            require_lockfile: ${{ inputs.require_lockfile }}
+            lockfile_mode: ${{ inputs.lockfile_mode }}
             require_clean_repo: true
             run_build: true
             run_test: true
@@ -507,7 +522,7 @@ jobs:
             artifact_name: ${{ needs.pending_release_pipeline.outputs.workspace_artifact_name }}
             commit_mode: skip
             install_dependencies: true
-            require_lockfile: ${{ inputs.require_lockfile }}
+            lockfile_mode: ${{ inputs.lockfile_mode }}
             node_version: ${{ inputs.node_version }}
             pnpm_cache: ${{ inputs.pnpm_cache }}
             post_overlay_command: |

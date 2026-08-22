@@ -83,11 +83,15 @@ on:
                 default: false
                 type: boolean
 
-            require_lockfile:
-                description: Use --frozen-lockfile when installing dependencies.
+            lockfile_mode:
+                description: >
+                    How the install treats pnpm-lock.yaml. frozen fails when the lockfile no longer
+                    satisfies the manifests; reconcile updates the existing lockfile as needed to
+                    satisfy them. reconcile is not a reset: it does not delete the lockfile and
+                    resolve from scratch.
                 required: false
-                default: true
-                type: boolean
+                default: frozen
+                type: string
 
         outputs:
             is_dirty:
@@ -112,13 +116,19 @@ jobs:
             is_dirty: ${{ steps.dirty.outputs.is_dirty }}
 
         steps:
-            - name: Validate commit mode
+            - name: Validate modes
               shell: bash
               run: |
                   set -euo pipefail
+
                   case "${{ inputs.commit_mode }}" in
                     skip|commit_if_dirty|require_dirty_then_commit|require_clean) ;;
                     *) echo "::error::Invalid commit_mode: ${{ inputs.commit_mode }}"; exit 1 ;;
+                  esac
+
+                  case "${{ inputs.lockfile_mode }}" in
+                    frozen|reconcile) ;;
+                    *) echo "::error::Invalid lockfile_mode: ${{ inputs.lockfile_mode }}. Expected frozen or reconcile."; exit 1 ;;
                   esac
 
             - name: Checkout repository
@@ -200,10 +210,10 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-                  if [[ "${{ inputs.require_lockfile }}" == "true" ]]; then
-                    pnpm install --frozen-lockfile
-                  else
+                  if [[ "${{ inputs.lockfile_mode }}" == "reconcile" ]]; then
                     pnpm install --no-frozen-lockfile
+                  else
+                    pnpm install --frozen-lockfile
                   fi
 
             - name: Commit changes
