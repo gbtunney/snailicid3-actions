@@ -70,16 +70,6 @@ on:
                 required: true
                 default: false
                 type: boolean
-            chromatic_mode:
-                description: Chromatic step policy (needs a project token unless skip)
-                required: true
-                default: skip
-                type: choice
-                options:
-                    - skip
-                    - report
-                    - abort_on_error
-
             node_version:
                 description: Node version to run
                 required: true
@@ -133,12 +123,6 @@ permissions:
 jobs:
     pipeline:
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
-        secrets:
-            # Optional; read only when chromatic_mode is not skip. Forward the
-            # token(s) this repository's Storybook projects actually read.
-            CHROMATIC_PROJECT_TOKEN_GBT_SCOPE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_GBT_SCOPE }}
-            CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE }}
-            CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT: ${{ secrets.CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT }}
         with:
             mode: ${{ inputs.mode }}
             check_mode: ${{ inputs.check_mode }}
@@ -149,7 +133,6 @@ jobs:
             run_build: ${{ inputs.run_build }}
             run_test: ${{ inputs.run_test }}
             run_docs_build: ${{ inputs.run_docs_build }}
-            chromatic_mode: ${{ inputs.chromatic_mode }}
             node_version: ${{ inputs.node_version }}
             nx_cache_reset: ${{ inputs.nx_cache_reset }}
             pnpm_cache: ${{ inputs.pnpm_cache }}

@@ -60,14 +60,12 @@ jobs:
             - name: Check reusable workflows and caller templates
               run: pnpm check:callers
 
-            - name: Sync templates into throwaway consumers
+            - name: Sync templates into a throwaway consumer
               shell: bash
               run: |
                   set -euo pipefail
                   mkdir -p "$RUNNER_TEMP/consumer/.github/workflows"
-                  mkdir -p "$RUNNER_TEMP/consumer-chromatic/.github/workflows"
                   bin/sync-callers.sh "$RUNNER_TEMP/consumer"
-                  bin/sync-callers.sh --chromatic "$RUNNER_TEMP/consumer-chromatic"
 
             - name: Synced consumer workflows must match their templates
               run: bin/sync-callers.sh --check "$RUNNER_TEMP/consumer"
@@ -99,7 +97,6 @@ jobs:
               run: |
                   set -euo pipefail
                   pnpm check:callers --external "$RUNNER_TEMP/consumer/.github/workflows"
-                  pnpm check:callers --external "$RUNNER_TEMP/consumer-chromatic/.github/workflows"
 
     composite_actions:
         name: composite actions
@@ -141,6 +138,49 @@ jobs:
               with:
                   base-branch: main
                   require-changeset: 'true'
+
+            # The fixture has no Nx, so `nx run-many` fails — which is exactly
+            # what makes the report path testable: it must warn and continue.
+            - name: Run Chromatic (skip) must no-op
+              uses: $/.github/actions/run-chromatic
+              with:
+                  mode: skip
+
+            - name: Run Chromatic (report) must survive a failing target
+              uses: $/.github/actions/run-chromatic
+              with:
+                  mode: report
+
+            - name: Run Chromatic (abort_on_error) must fail a failing target
+              id: chromatic_abort
+              continue-on-error: true
+              uses: $/.github/actions/run-chromatic
+              with:
+                  mode: abort_on_error
+
+            - name: Run Chromatic (bad mode) must be rejected
+              id: chromatic_bad_mode
+              continue-on-error: true
+              uses: $/.github/actions/run-chromatic
+              with:
+                  mode: definitely-not-a-mode
+
+            - name: Assert Chromatic step policy
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  if [[ "${{ steps.chromatic_abort.outcome }}" != "failure" ]]; then
+                    echo "::error::abort_on_error should have failed on a failing target (got ${{ steps.chromatic_abort.outcome }})."
+                    exit 1
+                  fi
+
+                  if [[ "${{ steps.chromatic_bad_mode.outcome }}" != "failure" ]]; then
+                    echo "::error::An invalid mode should have been rejected (got ${{ steps.chromatic_bad_mode.outcome }})."
+                    exit 1
+                  fi
+
+                  echo "Chromatic step policy behaves: skip no-ops, report continues, abort_on_error and a bad mode fail."
 
             - name: Assert scope-commit derives conventional messages
               shell: bash

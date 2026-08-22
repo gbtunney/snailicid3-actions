@@ -4,36 +4,21 @@
 # SOURCE: gbtunney/snailicid3-actions
 #
 # Secrets contract:
-#   Chromatic project tokens are the only secrets this workflow reads, and
-#   only when chromatic_mode is not skip. Each Storybook project owns one named
-#   token and its own Chromatic CLI flags; this workflow exports every declared
-#   token and runs one `nx run-many -t chromatic`, so projects with distinct
-#   tokens all publish from a single invocation.
+#   None. This workflow reads no secrets at all.
 #
-#   The inventory below is explicit on purpose: a reusable workflow can only
-#   declare secrets by literal name, and discovering names by reading package
-#   manifests would make the contract unreviewable. A new Storybook project
-#   adds one entry here and re-tags v1.
-#
-#   Callers forward by name — see templates/README.md. A caller that leaves
-#   chromatic_mode at skip forwards no secrets at all.
+#   Chromatic used to live here, which forced this shared repository to declare
+#   every consumer's project token by literal name — `workflow_call.secrets`
+#   has no dynamic form. That made adding a Storybook project in an unrelated
+#   repository an edit and a re-tag here. Chromatic now ships as the
+#   run-chromatic composite action, which has no static secret contract: a
+#   consumer sets whatever token variables its projects read as job-level env
+#   in its own workflow. See templates/README.md.
 # ─────────────────────────────────────────────────────────────
 
 name: z Pipeline 🚰
 
 on:
     workflow_call:
-        secrets:
-            CHROMATIC_PROJECT_TOKEN_GBT_SCOPE:
-                description: Chromatic project token for @snailicid3/gbt-scope.
-                required: false
-            CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE:
-                description: Chromatic project token for @snailicid3/video-intelligence-viewer.
-                required: false
-            CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT:
-                description: Chromatic project token for @gbt/template-example-react.
-                required: false
-
         inputs:
             checkout_ref:
                 description: Optional ref to check out before running the pipeline.
@@ -75,16 +60,6 @@ on:
                 required: false
                 default: false
                 type: boolean
-
-            chromatic_mode:
-                description: >
-                    Chromatic step policy. skip runs nothing and needs no credentials; report runs
-                    Chromatic and leaves a failure non-fatal; abort_on_error fails the workflow when
-                    the Chromatic target fails. CLI flags belong to each project's chromatic target,
-                    not here.
-                required: false
-                default: skip
-                type: string
 
             require_clean_repo:
                 required: false
@@ -234,7 +209,6 @@ jobs:
                     echo "- run_build: \`${{ inputs.run_build }}\`"
                     echo "- run_test: \`${{ inputs.run_test }}\`"
                     echo "- run_docs_build: \`${{ inputs.run_docs_build }}\`"
-                    echo "- chromatic_mode: \`${{ inputs.chromatic_mode }}\`"
                     echo "- disable_nx_cloud (resolved): \`${{ steps.nx_cloud_policy.outputs.effective_disable_nx_cloud }}\`"
                     echo "- upload_workspace_artifact: \`${{ inputs.upload_workspace_artifact }}\`"
                     echo "- use_nx_affected: \`${{ inputs.use_nx_affected }}\`"
@@ -310,55 +284,6 @@ jobs:
               if: ${{ inputs.run_test && !inputs.use_nx_affected }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               run: pnpm test
-
-            - name: 🚦 Validate Chromatic mode
-              if: ${{ always() }}
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  case "${{ inputs.chromatic_mode }}" in
-                    skip|report|abort_on_error) ;;
-                    *) echo "::error::Invalid chromatic_mode: ${{ inputs.chromatic_mode }}. Expected skip, report, or abort_on_error."; exit 1 ;;
-                  esac
-
-            # Every declared project token is exported, so one `nx run-many`
-            # publishes each project under its own token. Each project's
-            # chromatic target picks the variable it wants and owns its CLI
-            # flags; projects without the target are skipped by Nx.
-            - name: 🎨 Run Chromatic
-              if: ${{ inputs.chromatic_mode != 'skip' }}
-              continue-on-error: ${{ inputs.chromatic_mode == 'report' }}
-              shell: bash
-              env:
-                  CHROMATIC_PROJECT_TOKEN_GBT_SCOPE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_GBT_SCOPE }}
-                  CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE }}
-                  CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT: ${{ secrets.CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT }}
-              run: |
-                  set -euo pipefail
-
-                  # Names only — a token value must never reach the log.
-                  provided=()
-                  missing=()
-                  for token_name in \
-                    CHROMATIC_PROJECT_TOKEN_GBT_SCOPE \
-                    CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE \
-                    CHROMATIC_PROJECT_TOKEN_TEMPLATE_EXAMPLE_REACT; do
-                    if [[ -n "${!token_name:-}" ]]; then
-                      provided+=("$token_name")
-                    else
-                      missing+=("$token_name")
-                    fi
-                  done
-
-                  echo "Chromatic tokens provided: ${provided[*]:-none}"
-                  echo "Chromatic tokens not provided: ${missing[*]:-none}"
-
-                  if [[ "${#provided[@]}" -eq 0 ]]; then
-                    echo "::error::chromatic_mode is ${{ inputs.chromatic_mode }} but no Chromatic project token was forwarded. Add the token your Storybook project reads to the calling job's secrets: block (see templates/README.md) and set it in the repository secrets."
-                    exit 1
-                  fi
-
-                  pnpm exec nx run-many -t chromatic
 
             - name: 📘 Run Docs Build
               if: ${{ inputs.run_docs_build && !inputs.use_nx_affected }}

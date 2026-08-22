@@ -7,11 +7,7 @@ set -euo pipefail
 # templates/workflows/ with the template header swapped for a synced marker.
 #
 # Usage:
-#   bin/sync-callers.sh [--chromatic] [--check] <path-to-consumer-repo> [<path> ...]
-#
-# --chromatic turns chromatic_mode from skip to abort_on_error in the synced
-# pr-checks and push-main callers, for repos whose projects have a chromatic
-# target (requires that project's named token as a repository secret).
+#   bin/sync-callers.sh [--check] <path-to-consumer-repo> [<path> ...]
 #
 # --check writes nothing and exits non-zero if a consumer workflow has
 # drifted from its template, or if a consumer still carries a synced workflow
@@ -22,7 +18,6 @@ set -euo pipefail
 #
 # Example (all repos cloned side by side):
 #   bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
-#   bin/sync-callers.sh --chromatic ../gbt-monorepov2
 #   bin/sync-callers.sh --check ../snailicid3
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,15 +28,10 @@ TEMPLATE_DIR="$SCRIPT_DIR/../templates/workflows"
     exit 1
 }
 
-ENABLE_CHROMATIC=false
 CHECK_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --chromatic)
-            ENABLE_CHROMATIC=true
-            shift
-            ;;
         --check)
             CHECK_ONLY=true
             shift
@@ -59,7 +49,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ $# -ge 1 ]] || {
-    echo "usage: bin/sync-callers.sh [--chromatic] [--check] <path-to-consumer-repo> [<path> ...]" >&2
+    echo "usage: bin/sync-callers.sh [--check] <path-to-consumer-repo> [<path> ...]" >&2
     exit 1
 }
 
@@ -76,18 +66,11 @@ SYNC_HEADER="# ─────────────────────�
 # Render one template to stdout exactly as it should appear in a consumer.
 render() {
     local template="$1"
-    local name
-    name="$(basename "$template")"
-
     {
         printf '%s\n' "$SYNC_HEADER"
         # Drop the template's own header block (first comment ruler pair).
         awk 'BEGIN{skip=1} skip && /^# ─/{count++; if(count==2){skip=0}; next} skip && /^#/{next} {print}' "$template"
-    } | if [[ "$ENABLE_CHROMATIC" == "true" && ("$name" == "pr-checks.yml" || "$name" == "push-main.yml") ]]; then
-        sed 's/chromatic_mode: skip/chromatic_mode: abort_on_error/'
-    else
-        cat
-    fi
+    }
 }
 
 drift=0

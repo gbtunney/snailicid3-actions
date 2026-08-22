@@ -26,16 +26,6 @@ const MAPPING_KEY_LINE = /^(["']?)([A-Za-z0-9_.$-][^:'"]*)\1:(?:\s+(.*))?$/
 const SECRET_REFERENCE = /secrets\.(?<name>[A-Za-z_][A-Za-z0-9_]*)/g
 
 /**
- * Chromatic project tokens are per-project and named, so the rule below finds
- * them from what the called workflow declares rather than hard-coding a list
- * that would drift every time a Storybook project is added.
- */
-const CHROMATIC_TOKEN = /^CHROMATIC_PROJECT_TOKEN_[A-Z0-9_]+$/
-
-/** Step policies `chromatic_mode` accepts; anything else fails the job at runtime. */
-const CHROMATIC_MODES = new Set(['skip', 'report', 'abort_on_error'])
-
-/**
  * One mapping key found in a workflow file.
  *
  * Workflow files are uniformly indented mappings, so tracking indentation is
@@ -297,43 +287,6 @@ const checkReusableWorkflow = (workflow: Workflow, fail: Reporter): void => {
     }
 }
 
-/**
- * Check a job's Chromatic wiring against the tokens the callee declares.
- *
- * A caller that turns Chromatic on without forwarding any project token gets a
- * job failure deep into a pipeline run, long after build and test have spent
- * their minutes. Expression values cannot be resolved statically, so only
- * literal modes are judged.
- */
-const checkChromaticContract = (job: CallerJob, called: Workflow, fail: Reporter): void => {
-    const mode = job.inputs['chromatic_mode']
-    if (mode === undefined || mode.startsWith('${{')) return
-
-    if (!CHROMATIC_MODES.has(mode)) {
-        fail(
-            job.line,
-            `job "${job.id}" sets chromatic_mode: ${mode}, which is not one of ${[...CHROMATIC_MODES].join(', ')}`,
-        )
-        return
-    }
-
-    if (mode === 'skip') return
-
-    const projectTokens = [...called.declared.keys()].filter((secret) => CHROMATIC_TOKEN.test(secret))
-    if (projectTokens.length === 0) return
-
-    if (!forwardsAnyOf(job, projectTokens)) {
-        fail(
-            job.line,
-            `job "${job.id}" sets chromatic_mode: ${mode} but forwards none of ${projectTokens.join(', ')}`,
-        )
-    }
-}
-
-/** True when the job forwards at least one of the given secret names. */
-const forwardsAnyOf = (job: CallerJob, secrets: string[]): boolean =>
-    (job.forwarded ?? []).some((forwarded) => secrets.includes(forwarded))
-
 /** Check every job in a caller against the workflow it invokes. */
 const checkCallerWorkflow = (
     workflow: Workflow,
@@ -382,8 +335,6 @@ const checkCallerWorkflow = (
                 fail(job.line, `job "${job.id}" omits ${secret}, required by ${target.file}`)
             }
         }
-
-        checkChromaticContract(job, called, fail)
 
         /** A job-level block replaces the workflow-level one rather than merging. */
         const granted = job.permissions ?? workflow.permissions
