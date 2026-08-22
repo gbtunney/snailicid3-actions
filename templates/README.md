@@ -16,8 +16,9 @@ bin/sync-callers.sh --check ../snailicid3           # fail on drift, write nothi
 A caller that gets any of the three rules below wrong does not fail a job.
 GitHub refuses to start the run: conclusion `startup_failure`, **zero jobs**, no
 logs to read. The rules are checked statically by
-`bin/check-caller-contract.mjs` (run on every PR by `test-actions.yml`, against
-the templates *and* against freshly synced consumer copies).
+`bin/check-caller-contract.ts` (`pnpm check:callers`), run on every PR by
+`test-actions.yml` against the templates *and* against freshly synced consumer
+copies.
 
 ### 1. Forward secrets by name — never `secrets: inherit`
 
@@ -49,6 +50,25 @@ does not need `NPM_TOKEN`, and one that never runs Chromatic does not need
 
 A caller cannot grant a called workflow fewer permissions than it requests.
 Ask for less — even by leaving a scope out — and the run dies at startup.
+
+Grant them per job. A job-level `permissions:` block replaces the
+workflow-level one rather than merging with it, so the pattern is a
+restrictive workflow-level floor plus a per-job minimum — that way a summary
+or guard job never holds the write token the release call needed:
+
+```yaml
+permissions:
+    contents: read
+
+jobs:
+    release_plan:
+        permissions:
+            contents: write
+            actions: write
+            id-token: write
+            pull-requests: write
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
+```
 
 ### 3. Reference reusable workflows by their full path
 
@@ -88,9 +108,12 @@ The reusable workflow and every caller that invokes it move together:
 
 1. Change the secret declaration in `.github/workflows/call-*.yml`.
 2. Update every template here that calls it.
-3. `node bin/check-caller-contract.mjs` — catches a template left behind.
+3. `pnpm check:callers` — catches a template left behind.
 4. `bin/sync-callers.sh <consumer> ...` so consumers stop drifting, then
-   `bin/sync-callers.sh --check <consumer>` to confirm.
+   `bin/sync-callers.sh --check <consumer>` to confirm. `--check` also fails on
+   a consumer file that still carries the generated header but no longer has a
+   template — deleting or renaming a template otherwise leaves an obsolete
+   caller holding the old secret contract forever.
 5. After moving the `v1` tag, dispatch **Smoke Cross-Repo (v1)**. It calls the
    published workflows through a remote ref the way a consumer does, which is
    the only check that exercises the boundary a same-repository self-test

@@ -39,10 +39,10 @@ on:
                 default: workspace update
                 type: string
 
+# Workflow-level floor. Only the apply job commits and pushes, so only it
+# elevates; the guard and pipeline jobs run with a read token.
 permissions:
-    contents: write
-    actions: read
-    id-token: write
+    contents: read
 
 env:
     HUSKY: 0
@@ -92,6 +92,10 @@ jobs:
         name: Apply artifact and commit
         needs: pipeline_workspace_update
         if: ${{ needs.pipeline_workspace_update.result == 'success' && needs.pipeline_workspace_update.outputs.artifact_uploaded == 'true' }}
+        permissions:
+            contents: write
+            actions: read
+            id-token: write
         uses: gbtunney/snailicid3-actions/.github/workflows/call-apply-workspace-artifact.yml@v1
         secrets:
             # Optional. Pushing with GH_PAT instead of github.token lets the

@@ -9,11 +9,9 @@ Reusable GitHub Actions and workflows for the `snailicid3` ecosystem.
 Reference these from any repository:
 
 ```yaml
+# Workflow-level floor; every job elevates to its own minimum.
 permissions:
-  contents: write
-  actions: write
-  id-token: write
-  pull-requests: write
+  contents: read
 
 jobs:
   pipeline:
@@ -26,12 +24,21 @@ jobs:
     uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@v1
 
   release:
+    permissions:
+      contents: write
+      actions: write
+      id-token: write
+      pull-requests: write
     uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
     secrets:
       GH_PAT: ${{ secrets.GH_PAT }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   apply:
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
     uses: gbtunney/snailicid3-actions/.github/workflows/call-apply-workspace-artifact.yml@v1
     secrets:
       GH_PAT: ${{ secrets.GH_PAT }}
@@ -42,9 +49,15 @@ jobs:
 Callers forward secrets **by name**, never `secrets: inherit`, and must grant
 at least the permissions the called workflow declares. Get either wrong and
 GitHub refuses to start the run — `startup_failure`, zero jobs, nothing to
-read. Both rules, and the secret each workflow actually consumes, are in
-[`templates/README.md`](templates/README.md); `bin/check-caller-contract.mjs`
-enforces them on every PR.
+read.
+
+Grant those permissions per job, not once at the top: a job-level block
+replaces the workflow-level one rather than merging with it, so a restrictive
+workflow-level floor plus a per-job minimum keeps `pipeline`, `detect`, and
+any summary job on a read-only token while `release` gets what it needs. The
+per-workflow minimums, and the secret each workflow actually consumes, are in
+[`templates/README.md`](templates/README.md); `bin/check-caller-contract.ts`
+enforces both rules on every PR.
 
 ### Composite Actions
 
@@ -132,6 +145,8 @@ Requirements in the calling repository:
 ```yaml
 jobs:
   pipeline:
+    permissions:
+      contents: read
     uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
     secrets:
       CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
@@ -191,10 +206,11 @@ workspace (the root `package.json`, which depends on the published
   asserting dirty-state detection),
 - `call-release-plan.yml` in dry-run mode,
 - `scope-commit` message derivation,
-- the caller contract (`bin/check-caller-contract.mjs`) against the reusable
-  workflows, the templates, and a consumer synced fresh from those templates —
-  plus `bin/check-caller-contract.test.mjs`, which proves the checker still
-  rejects each mistake it claims to catch.
+- the caller contract (`pnpm check:callers`, `bin/check-caller-contract.ts`)
+  against the reusable workflows, the templates, and a consumer synced fresh
+  from those templates — plus `pnpm test:callers`, which proves the checker
+  still rejects each mistake it claims to catch, and `bin/sync-callers.sh
+  --check`, including its orphaned-template case.
 
 ### Cross-repository smoke
 

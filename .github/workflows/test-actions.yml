@@ -12,7 +12,7 @@ name: Test Actions
 #
 # Same-repository refs cannot exercise the cross-repository caller boundary —
 # see smoke-cross-repo.yml for that. What this suite does cover statically is
-# the caller contract itself (bin/check-caller-contract.mjs), because a wrong
+# the caller contract itself (bin/check-caller-contract.ts), because a wrong
 # contract fails a consumer at workflow startup with zero jobs to inspect.
 
 on:
@@ -35,13 +35,30 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v4
 
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+
+            - name: Setup Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: '24'
+                  cache: pnpm
+
+            - name: Install fixture dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Typecheck
+              run: pnpm typecheck
+
             # A checker that never fails is worse than no checker, so the
             # checker's own regression fixtures run first.
             - name: Prove the contract checker catches regressions
-              run: node bin/check-caller-contract.test.mjs
+              run: pnpm test:callers
 
             - name: Check reusable workflows and caller templates
-              run: node bin/check-caller-contract.mjs
+              run: pnpm check:callers
 
             - name: Sync templates into throwaway consumers
               shell: bash
@@ -55,6 +72,25 @@ jobs:
             - name: Synced consumer workflows must match their templates
               run: bin/sync-callers.sh --check "$RUNNER_TEMP/consumer"
 
+            # A deleted or renamed template leaves its generated copy behind in
+            # every consumer, still wired to the old secret contract. Looping
+            # over templates alone can never see that file, so prove the orphan
+            # scan does.
+            - name: Drift check must flag an orphaned synced workflow
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  orphan="$RUNNER_TEMP/consumer/.github/workflows/dispatch-obsolete.yml"
+                  cp "$RUNNER_TEMP/consumer/.github/workflows/push-main.yml" "$orphan"
+
+                  if bin/sync-callers.sh --check "$RUNNER_TEMP/consumer" > /dev/null 2>&1; then
+                    echo "::error::sync-callers.sh --check passed with an orphaned synced workflow present."
+                    exit 1
+                  fi
+
+                  rm "$orphan"
+                  echo "Orphaned synced workflow correctly reported as drift."
+
             # The synced copies are what consumers actually run, so they get
             # checked as external callers: fully qualified refs, named secret
             # forwarding, permissions that cover the called workflow.
@@ -62,8 +98,8 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-                  node bin/check-caller-contract.mjs --external "$RUNNER_TEMP/consumer/.github/workflows"
-                  node bin/check-caller-contract.mjs --external "$RUNNER_TEMP/consumer-chromatic/.github/workflows"
+                  pnpm check:callers --external "$RUNNER_TEMP/consumer/.github/workflows"
+                  pnpm check:callers --external "$RUNNER_TEMP/consumer-chromatic/.github/workflows"
 
     composite_actions:
         name: composite actions
