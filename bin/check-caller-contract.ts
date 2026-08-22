@@ -23,7 +23,7 @@ const PERMISSION_LEVELS: Record<string, number> = { none: 0, read: 1, write: 2 }
 
 const BLOCK_SCALAR_VALUE = /^[|>][+-]?\d*(\s+#.*)?$/
 const MAPPING_KEY_LINE = /^(["']?)([A-Za-z0-9_.$-][^:'"]*)\1:(?:\s+(.*))?$/
-const SECRET_REFERENCE = /secrets\.([A-Za-z_][A-Za-z0-9_]*)/g
+const SECRET_REFERENCE = /secrets\.(?<name>[A-Za-z_][A-Za-z0-9_]*)/g
 
 /**
  * One mapping key found in a workflow file.
@@ -99,8 +99,10 @@ const parseWorkflowNodes = (text: string): WorkflowNode[] => {
         }
         if (trimmed === '' || trimmed.startsWith('#')) return
 
-        // Sequence entries are opaque, but a block scalar opened inside one
-        // still has to be skipped over.
+        /**
+         * Sequence entries are opaque here, but a block scalar opened inside
+         * one still has to be skipped over.
+         */
         const body = trimmed.startsWith('- ') ? trimmed.slice(2).trim() : trimmed
         const keyMatch = MAPPING_KEY_LINE.exec(body)
         if (!keyMatch) return
@@ -199,7 +201,9 @@ export const loadWorkflow = (path: string): Workflow => {
     }
 
     const referenced = new Set(
-        [...stripComments(text).matchAll(SECRET_REFERENCE)].map((reference) => reference[1]!),
+        [...stripComments(text).matchAll(SECRET_REFERENCE)].map(
+            (reference) => reference.groups!['name']!,
+        ),
     )
 
     const jobs = directChildren(nodes, topLevelIndex(nodes, 'jobs')).map((job): CallerJob => {
@@ -342,7 +346,7 @@ const checkCallerWorkflow = (
             )
         }
 
-        // A job-level block replaces the workflow-level one rather than merging.
+        /** A job-level block replaces the workflow-level one rather than merging. */
         const granted = job.permissions ?? workflow.permissions
         if (!called.permissions) continue
 
@@ -440,7 +444,7 @@ export const parseArguments = (argv: string[]): ContractCheckOptions => {
     while (remaining.length > 0) {
         const argument = remaining.shift()!
 
-        // `pnpm run <script> -- --flag` forwards a bare separator through.
+        /** `pnpm run <script> -- --flag` forwards a bare separator through. */
         if (argument === '--') continue
 
         if (argument === '--reusable') {

@@ -108,8 +108,10 @@ const fixtures: ContractFixture[] = [
         expect: 'never reads it',
     },
     {
-        // Documentation comments naming a secret are common in these files, so
-        // a comment-blind scan would quietly retire the unread-secret rule.
+        /**
+         * Documentation comments naming a secret are common in these files, so
+         * a comment-blind scan would quietly retire the unread-secret rule.
+         */
         name: 'a secret named only in a comment still counts as unread',
         reusable: REUSABLE.replace(
             'jobs:',
