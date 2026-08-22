@@ -52,7 +52,9 @@ jobs:
         needs: detect
         if: ${{ needs.detect.outputs.should_version == 'true' }}
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
-        secrets: inherit
+        secrets:
+            # Optional; only read when run_chromatic is true.
+            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
         with:
             run_chromatic: false
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
@@ -71,7 +73,9 @@ jobs:
         needs: detect
         if: ${{ needs.detect.outputs.should_publish == 'true' }}
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
-        secrets: inherit
+        secrets:
+            # Optional; only read when run_chromatic is true.
+            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
         with:
             run_chromatic: false
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
@@ -90,7 +94,9 @@ jobs:
         needs: detect
         if: ${{ needs.detect.outputs.should_skip == 'true' }}
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
-        secrets: inherit
+        secrets:
+            # Optional; only read when run_chromatic is true.
+            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
         with:
             run_chromatic: false
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}

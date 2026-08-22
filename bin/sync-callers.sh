@@ -7,15 +7,23 @@ set -euo pipefail
 # templates/workflows/ with the template header swapped for a synced marker.
 #
 # Usage:
-#   bin/sync-callers.sh [--chromatic] <path-to-consumer-repo> [<path> ...]
+#   bin/sync-callers.sh [--chromatic] [--check] <path-to-consumer-repo> [<path> ...]
 #
 # --chromatic flips run_chromatic to true in the synced pr-checks and
 # push-main callers, for repos whose projects have a chromatic script
 # (requires the CHROMATIC_PROJECT_TOKEN repository secret).
 #
+# --check writes nothing and exits non-zero if a consumer workflow has
+# drifted from its template, or if a consumer still carries a synced workflow
+# whose template no longer exists. The secret contract lives in the templates,
+# so a drifted consumer — and an obsolete caller holding the *old* contract
+# forever — is a consumer that can start failing at workflow startup with zero
+# jobs. See templates/README.md.
+#
 # Example (all repos cloned side by side):
 #   bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
 #   bin/sync-callers.sh --chromatic ../gbt-monorepov2
+#   bin/sync-callers.sh --check ../snailicid3
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/../templates/workflows"
@@ -26,20 +34,63 @@ TEMPLATE_DIR="$SCRIPT_DIR/../templates/workflows"
 }
 
 ENABLE_CHROMATIC=false
-if [[ "${1:-}" == "--chromatic" ]]; then
-    ENABLE_CHROMATIC=true
-    shift
-fi
+CHECK_ONLY=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --chromatic)
+            ENABLE_CHROMATIC=true
+            shift
+            ;;
+        --check)
+            CHECK_ONLY=true
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "error: unknown option: $1" >&2
+            exit 1
+            ;;
+        *) break ;;
+    esac
+done
 
 [[ $# -ge 1 ]] || {
-    echo "usage: bin/sync-callers.sh [--chromatic] <path-to-consumer-repo> [<path> ...]" >&2
+    echo "usage: bin/sync-callers.sh [--chromatic] [--check] <path-to-consumer-repo> [<path> ...]" >&2
     exit 1
 }
 
-SYNC_HEADER='# ─────────────────────────────────────────────────────────────
-# SYNCED from gbtunney/snailicid3-actions/templates/workflows — do not edit
+# The marker identifies a file as generated, so --check can find synced
+# workflows whose template has since been deleted or renamed. Keep it and the
+# header below in one place — a drifted marker makes orphans undetectable.
+SYNC_MARKER='SYNCED from gbtunney/snailicid3-actions/templates/workflows'
+
+SYNC_HEADER="# ─────────────────────────────────────────────────────────────
+# ${SYNC_MARKER} — do not edit
 # here. Change the template and re-run bin/sync-callers.sh.
-# ─────────────────────────────────────────────────────────────'
+# ─────────────────────────────────────────────────────────────"
+
+# Render one template to stdout exactly as it should appear in a consumer.
+render() {
+    local template="$1"
+    local name
+    name="$(basename "$template")"
+
+    {
+        printf '%s\n' "$SYNC_HEADER"
+        # Drop the template's own header block (first comment ruler pair).
+        awk 'BEGIN{skip=1} skip && /^# ─/{count++; if(count==2){skip=0}; next} skip && /^#/{next} {print}' "$template"
+    } | if [[ "$ENABLE_CHROMATIC" == "true" && ("$name" == "pr-checks.yml" || "$name" == "push-main.yml") ]]; then
+        sed 's/run_chromatic: false/run_chromatic: true/'
+    else
+        cat
+    fi
+}
+
+drift=0
 
 for repo in "$@"; do
     target="$repo/.github/workflows"
@@ -52,17 +103,43 @@ for repo in "$@"; do
     for template in "$TEMPLATE_DIR"/*.yml; do
         name="$(basename "$template")"
 
-        {
-            printf '%s\n' "$SYNC_HEADER"
-            # Drop the template's own header block (first comment ruler pair).
-            awk 'BEGIN{skip=1} skip && /^# ─/{count++; if(count==2){skip=0}; next} skip && /^#/{next} {print}' "$template"
-        } > "$target/$name"
-
-        if [[ "$ENABLE_CHROMATIC" == "true" && ( "$name" == "pr-checks.yml" || "$name" == "push-main.yml" ) ]]; then
-            sed -i.bak 's/run_chromatic: false/run_chromatic: true/' "$target/$name"
-            rm -f "$target/$name.bak"
+        if [[ "$CHECK_ONLY" == "true" ]]; then
+            if [[ ! -f "$target/$name" ]]; then
+                echo "missing  $name in $target"
+                drift=1
+            elif ! render "$template" | diff -u --label "template/$name" --label "$target/$name" - "$target/$name"; then
+                echo "drifted  $name in $target"
+                drift=1
+            else
+                echo "in sync  $name in $target"
+            fi
+            continue
         fi
 
+        render "$template" > "$target/$name"
         echo "synced $name -> $target"
     done
+
+    # A template that was deleted or renamed leaves its generated copy behind
+    # in every consumer, still wired to the contract it was generated from.
+    # Looping over templates alone can never see that file.
+    while IFS= read -r -d '' synced; do
+        name="$(basename "$synced")"
+
+        if [[ -f "$TEMPLATE_DIR/$name" ]]; then
+            continue
+        fi
+
+        if [[ "$CHECK_ONLY" == "true" ]]; then
+            echo "orphaned $name in $target (no matching template — delete it)"
+            drift=1
+        else
+            echo "warning: $name in $target has no matching template; delete it by hand" >&2
+        fi
+    done < <(grep -rlZ --include='*.yml' --include='*.yaml' -- "$SYNC_MARKER" "$target" 2> /dev/null || true)
 done
+
+if [[ "$CHECK_ONLY" == "true" && "$drift" -ne 0 ]]; then
+    echo "error: consumer workflows have drifted from templates/workflows; re-run bin/sync-callers.sh" >&2
+    exit 1
+fi

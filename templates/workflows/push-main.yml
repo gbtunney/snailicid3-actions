@@ -24,7 +24,9 @@ jobs:
     required:
         name: required
         uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
-        secrets: inherit
+        secrets:
+            # Optional; only read when run_chromatic is true.
+            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
         with:
             run_chromatic: false
             mode: abort_on_error

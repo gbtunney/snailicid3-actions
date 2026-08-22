@@ -9,6 +9,11 @@ name: Test Actions
 #
 # Same-repository actions/workflows resolve from the current workflow commit.
 # Composite actions use `$/`; reusable workflow calls may use `$/` or `./`.
+#
+# Same-repository refs cannot exercise the cross-repository caller boundary —
+# see smoke-cross-repo.yml for that. What this suite does cover statically is
+# the caller contract itself (bin/check-caller-contract.ts), because a wrong
+# contract fails a consumer at workflow startup with zero jobs to inspect.
 
 on:
     pull_request:
@@ -23,6 +28,79 @@ env:
     HUSKY: 0
 
 jobs:
+    caller_contract:
+        name: caller contract
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+
+            - name: Setup Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: '24'
+                  cache: pnpm
+
+            - name: Install fixture dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Typecheck
+              run: pnpm typecheck
+
+            # A checker that never fails is worse than no checker, so the
+            # checker's own regression fixtures run first.
+            - name: Prove the contract checker catches regressions
+              run: pnpm test:callers
+
+            - name: Check reusable workflows and caller templates
+              run: pnpm check:callers
+
+            - name: Sync templates into throwaway consumers
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  mkdir -p "$RUNNER_TEMP/consumer/.github/workflows"
+                  mkdir -p "$RUNNER_TEMP/consumer-chromatic/.github/workflows"
+                  bin/sync-callers.sh "$RUNNER_TEMP/consumer"
+                  bin/sync-callers.sh --chromatic "$RUNNER_TEMP/consumer-chromatic"
+
+            - name: Synced consumer workflows must match their templates
+              run: bin/sync-callers.sh --check "$RUNNER_TEMP/consumer"
+
+            # A deleted or renamed template leaves its generated copy behind in
+            # every consumer, still wired to the old secret contract. Looping
+            # over templates alone can never see that file, so prove the orphan
+            # scan does.
+            - name: Drift check must flag an orphaned synced workflow
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  orphan="$RUNNER_TEMP/consumer/.github/workflows/dispatch-obsolete.yml"
+                  cp "$RUNNER_TEMP/consumer/.github/workflows/push-main.yml" "$orphan"
+
+                  if bin/sync-callers.sh --check "$RUNNER_TEMP/consumer" > /dev/null 2>&1; then
+                    echo "::error::sync-callers.sh --check passed with an orphaned synced workflow present."
+                    exit 1
+                  fi
+
+                  rm "$orphan"
+                  echo "Orphaned synced workflow correctly reported as drift."
+
+            # The synced copies are what consumers actually run, so they get
+            # checked as external callers: fully qualified refs, named secret
+            # forwarding, permissions that cover the called workflow.
+            - name: Synced consumer workflows must satisfy the caller contract
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  pnpm check:callers --external "$RUNNER_TEMP/consumer/.github/workflows"
+                  pnpm check:callers --external "$RUNNER_TEMP/consumer-chromatic/.github/workflows"
+
     composite_actions:
         name: composite actions
         runs-on: ubuntu-latest
@@ -128,6 +206,10 @@ jobs:
             actions: read
             id-token: write
         uses: $/.github/workflows/call-apply-workspace-artifact.yml
+        # Mirrors dispatch-workspace-update: no post_overlay_command here, so
+        # nothing authenticates to npm and NPM_TOKEN is not forwarded.
+        secrets:
+            GH_PAT: ${{ secrets.GH_PAT }}
         with:
             artifact_name: self-test-workspace
             commit_mode: skip
@@ -157,6 +239,11 @@ jobs:
             id-token: write
             pull-requests: write
         uses: ./.github/workflows/call-release-plan.yml
+        # Mirrors dispatch-release-plan/push-release so the self-test exercises
+        # the same secret shape consumers use, dry run or not.
+        secrets:
+            GH_PAT: ${{ secrets.GH_PAT }}
+            NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         with:
             dry_run: true
             run_pipeline: false

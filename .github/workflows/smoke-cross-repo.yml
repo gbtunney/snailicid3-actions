@@ -1,0 +1,106 @@
+name: Smoke Cross-Repo (main)
+
+# SOURCE: gbtunney/snailicid3-actions
+#
+# ─────────────────────────────────────────────────────────────
+# WORKFLOW: cross-repository caller boundary smoke test
+#
+# test-actions.yml drives the reusable workflows through same-repository
+# refs, which never touches the boundary that actually breaks consumers: a
+# remote `<owner>/<repo>/.github/workflows/<file>.yml@<ref>` reference,
+# resolved with an explicit secret contract and a caller-granted permission
+# set. When that boundary is wrong GitHub does not fail a job — it refuses to
+# start the run at all (startup_failure, zero jobs), so no in-repo job can
+# observe it. The run conclusion is the assertion.
+#
+# This calls the reusable workflows exactly the way templates/workflows/ does.
+# It is a separate file from test-actions.yml on purpose: a startup failure
+# takes down a whole run, so a broken ref must not be able to erase the other
+# suite's signal. Smoke Cross-Repo (v1) covers the tag consumers pin.
+#
+# Everything here is read-only: dry run, report mode, nothing published.
+# ─────────────────────────────────────────────────────────────
+
+on:
+    workflow_dispatch:
+    push:
+        branches: [main]
+        paths:
+            - '.github/workflows/**'
+            - 'templates/workflows/**'
+
+concurrency:
+    group: smoke-cross-repo-main
+    cancel-in-progress: true
+
+env:
+    HUSKY: 0
+
+jobs:
+    release_plan:
+        name: call-release-plan.yml@main
+        # A caller must grant at least what the called workflow — and every
+        # workflow it nests — declares, or the run dies at startup.
+        permissions:
+            contents: write
+            actions: write
+            id-token: write
+            pull-requests: write
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@main
+        secrets:
+            GH_PAT: ${{ secrets.GH_PAT }}
+            NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        with:
+            dry_run: true
+            run_pipeline: false
+
+    pipeline:
+        name: call-pipeline.yml@main
+        permissions:
+            contents: read
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@main
+        # Forwarded even though run_chromatic is false: the forwarding is
+        # what this smoke test exists to exercise.
+        secrets:
+            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+        with:
+            mode: report
+            check_mode: skip
+            api_report_mode: skip
+            require_lockfile: false
+            require_clean_repo: false
+            run_build: false
+            run_test: false
+            run_docs_build: false
+            run_chromatic: false
+            pnpm_cache: true
+
+    verify:
+        name: verify remote callers
+        needs: [release_plan, pipeline]
+        if: ${{ always() }}
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Assert every remote-ref caller completed
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  release_plan="${{ needs.release_plan.result }}"
+                  pipeline="${{ needs.pipeline.result }}"
+
+                  {
+                    echo "## 🛰️ Cross-repository caller smoke (@main)"
+                    echo ""
+                    echo "- call-release-plan.yml@main: \`$release_plan\`"
+                    echo "- call-pipeline.yml@main: \`$pipeline\`"
+                    echo "- release phase: \`${{ needs.release_plan.outputs.release_phase }}\`"
+                  } | tee -a "$GITHUB_STEP_SUMMARY"
+
+                  if [ "$release_plan" != "success" ] || [ "$pipeline" != "success" ]; then
+                    echo "::error::A remote-ref caller did not succeed. If the run shows zero jobs for a called workflow, the caller boundary (secrets, permissions, or nested refs) regressed — see templates/README.md."
+                    exit 1
+                  fi
+
+                  echo "Remote-ref callers resolved, started, and completed."

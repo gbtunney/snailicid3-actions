@@ -1,0 +1,108 @@
+name: Smoke Cross-Repo (v1)
+
+# SOURCE: gbtunney/snailicid3-actions
+#
+# ─────────────────────────────────────────────────────────────
+# WORKFLOW: cross-repository caller boundary smoke test
+#
+# test-actions.yml drives the reusable workflows through same-repository
+# refs, which never touches the boundary that actually breaks consumers: a
+# remote `<owner>/<repo>/.github/workflows/<file>.yml@<ref>` reference,
+# resolved with an explicit secret contract and a caller-granted permission
+# set. When that boundary is wrong GitHub does not fail a job — it refuses to
+# start the run at all (startup_failure, zero jobs), so no in-repo job can
+# observe it. The run conclusion is the assertion.
+#
+# This calls the reusable workflows exactly the way templates/workflows/ does,
+# pinned to the `v1` tag that consumer repositories actually reference — so it
+# answers "is the published contract healthy right now?", independently of what
+# main contains. Dispatch it after moving the v1 tag.
+#
+# It is a separate file from test-actions.yml and from Smoke Cross-Repo (main)
+# on purpose: a startup failure takes down a whole run, so a broken published
+# tag must not be able to erase the other suites' signal.
+#
+# Everything here is read-only: dry run, report mode, nothing published.
+# ─────────────────────────────────────────────────────────────
+
+on:
+    workflow_dispatch:
+    schedule:
+        # Weekly, so a tag that silently rots is found before a consumer does.
+        - cron: '0 12 * * 1'
+
+concurrency:
+    group: smoke-cross-repo-v1
+    cancel-in-progress: true
+
+env:
+    HUSKY: 0
+
+jobs:
+    release_plan:
+        name: call-release-plan.yml@v1
+        # A caller must grant at least what the called workflow — and every
+        # workflow it nests — declares, or the run dies at startup.
+        permissions:
+            contents: write
+            actions: write
+            id-token: write
+            pull-requests: write
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
+        secrets:
+            GH_PAT: ${{ secrets.GH_PAT }}
+            NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        with:
+            dry_run: true
+            run_pipeline: false
+
+    pipeline:
+        name: call-pipeline.yml@v1
+        permissions:
+            contents: read
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
+        # Forwarded even though run_chromatic is false: the forwarding is
+        # what this smoke test exists to exercise.
+        secrets:
+            CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+        with:
+            mode: report
+            check_mode: skip
+            api_report_mode: skip
+            require_lockfile: false
+            require_clean_repo: false
+            run_build: false
+            run_test: false
+            run_docs_build: false
+            run_chromatic: false
+            pnpm_cache: true
+
+    verify:
+        name: verify remote callers
+        needs: [release_plan, pipeline]
+        if: ${{ always() }}
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Assert every remote-ref caller completed
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  release_plan="${{ needs.release_plan.result }}"
+                  pipeline="${{ needs.pipeline.result }}"
+
+                  {
+                    echo "## 🛰️ Cross-repository caller smoke (@v1)"
+                    echo ""
+                    echo "- call-release-plan.yml@v1: \`$release_plan\`"
+                    echo "- call-pipeline.yml@v1: \`$pipeline\`"
+                    echo "- release phase: \`${{ needs.release_plan.outputs.release_phase }}\`"
+                  } | tee -a "$GITHUB_STEP_SUMMARY"
+
+                  if [ "$release_plan" != "success" ] || [ "$pipeline" != "success" ]; then
+                    echo "::error::A remote-ref caller did not succeed. If the run shows zero jobs for a called workflow, the caller boundary (secrets, permissions, or nested refs) regressed — see templates/README.md."
+                    exit 1
+                  fi
+
+                  echo "Remote-ref callers resolved, started, and completed."
