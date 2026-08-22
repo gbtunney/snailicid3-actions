@@ -162,7 +162,7 @@ jobs:
               shell: bash
               run: |
                   {
-                    echo "## Pipeline Dispatch 결과"
+                    echo "## Pipeline dispatch results"
                     echo ""
                     echo "- pipeline result: \`${{ needs.pipeline.result }}\`"
                     echo "- is_repo_dirty: \`${{ needs.pipeline.outputs.is_repo_dirty }}\`"
