@@ -28,8 +28,7 @@ jobs:
             mode: abort_on_error
             check_mode: check
             lockfile_mode: frozen
+            build_mode: abort_on_error
+            test_mode: abort_on_error
+            docs_mode: skip
             require_clean_repo: true
-            run_build: true
-            run_test: true
-            run_docs_build: false
-            pnpm_cache: true
