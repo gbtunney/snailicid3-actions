@@ -191,6 +191,12 @@ pnpm exec scope-commit --staged --message <type> "<subject>"
   **fully qualified** (`gbtunney/snailicid3-actions/.github/actions/<name>@v1`).
   A local `./.github/actions/...` reference inside a reusable workflow resolves
   against the *caller's* checkout and breaks every cross-repo consumer.
+- Two Node versions are in play and they are unrelated. The `node_version`
+  input picks the Node the *workspace* builds and tests with. The major pinned
+  on an official action (`actions/checkout@v7`) picks the Node runtime GitHub
+  executes that *action's own* JavaScript on. A deprecation warning about the
+  action runtime is never fixed by changing `node_version`, and pinning a
+  newer action major does not change what the build runs on.
 
 ## Self-tests
 
