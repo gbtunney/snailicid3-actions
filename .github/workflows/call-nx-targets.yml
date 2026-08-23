@@ -1,0 +1,141 @@
+# ─────────────────────────────────────────────────────────────
+# WORKFLOW: Nx Targets
+# TYPE: reusable (workflow_call)
+# SOURCE: gbtunney/snailicid3-actions
+#
+# Explicit utility for ad-hoc Nx target execution. Normal PR/release validation
+# stays in call-pipeline.yml and uses the repository's ordinary routines.
+# ─────────────────────────────────────────────────────────────
+
+name: z Nx Targets 🎯
+
+on:
+    workflow_call:
+        inputs:
+            checkout_ref:
+                description: Optional ref to check out before running Nx targets.
+                required: false
+                default: ''
+                type: string
+
+            scope:
+                description: Run targets across all projects or only affected projects.
+                required: false
+                default: all
+                type: string
+
+            targets:
+                description: Space-delimited Nx target names.
+                required: false
+                default: lint test build
+                type: string
+
+            mode:
+                description: Whether target failures are reported or fail the workflow.
+                required: false
+                default: report
+                type: string
+
+permissions:
+    contents: read
+
+env:
+    HUSKY: 0
+    NX_NO_CLOUD: 'true'
+
+jobs:
+    nx_targets:
+        name: nx targets
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+                  ref: ${{ inputs.checkout_ref || github.ref }}
+
+            - uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+                  cache: false
+
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
+
+            - name: Validate Nx target request
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  case "${{ inputs.scope }}" in
+                    all|affected) ;;
+                    *) echo "::error::Invalid scope: ${{ inputs.scope }}. Expected all or affected."; exit 1 ;;
+                  esac
+
+                  case "${{ inputs.mode }}" in
+                    report|abort_on_error) ;;
+                    *) echo "::error::Invalid mode: ${{ inputs.mode }}. Expected report or abort_on_error."; exit 1 ;;
+                  esac
+
+                  read -r -a targets <<< "${{ inputs.targets }}"
+                  if [[ "${#targets[@]}" -eq 0 ]]; then
+                    echo "::error::At least one Nx target is required."
+                    exit 1
+                  fi
+
+                  for target in "${targets[@]}"; do
+                    if [[ ! "$target" =~ ^[A-Za-z0-9:_-]+$ ]]; then
+                      echo "::error::Invalid Nx target name: $target"
+                      exit 1
+                    fi
+                  done
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - uses: nrwl/nx-set-shas@v5
+              if: ${{ inputs.scope == 'affected' }}
+
+            - name: Resolve Nx Cloud policy
+              id: nx_cloud_policy
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  value="$(printf '%s' "${{ vars.DISABLE_NX_CLOUD || 'true' }}" | tr '[:upper:]' '[:lower:]')"
+                  if [[ "$value" != "true" && "$value" != "false" ]]; then
+                    echo "::warning::Invalid vars.DISABLE_NX_CLOUD value '$value'; defaulting to true."
+                    value="true"
+                  fi
+                  echo "disabled=$value" >> "$GITHUB_OUTPUT"
+
+            - name: Enable Nx Cloud
+              if: ${{ steps.nx_cloud_policy.outputs.disabled == 'false' }}
+              run: echo "NX_NO_CLOUD=false" >> "$GITHUB_ENV"
+
+            - name: Run Nx targets
+              continue-on-error: ${{ inputs.mode == 'report' }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  read -r -a targets <<< "${{ inputs.targets }}"
+
+                  if [[ "${{ inputs.scope }}" == "affected" ]]; then
+                    pnpm exec nx affected -t "${targets[@]}"
+                  else
+                    pnpm exec nx run-many -t "${targets[@]}"
+                  fi
+
+            - name: Summary
+              if: ${{ always() }}
+              shell: bash
+              run: |
+                  {
+                    echo "## 🎯 Nx targets"
+                    echo ""
+                    echo "- scope: \`${{ inputs.scope }}\`"
+                    echo "- targets: \`${{ inputs.targets }}\`"
+                    echo "- mode: \`${{ inputs.mode }}\`"
+                  } >> "$GITHUB_STEP_SUMMARY"

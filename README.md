@@ -9,7 +9,6 @@ Reusable GitHub Actions and workflows for the `snailicid3` ecosystem.
 Reference these from any repository:
 
 ```yaml
-# Workflow-level floor; every job elevates to its own minimum.
 permissions:
   contents: read
 
@@ -17,8 +16,16 @@ jobs:
   pipeline:
     uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
     with:
-      run_build: true
-      run_test: true
+      build_mode: abort_on_error
+      test_mode: abort_on_error
+      docs_mode: skip
+
+  nx_targets:
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-nx-targets.yml@v1
+    with:
+      scope: affected
+      targets: lint test build
+      mode: report
 
   detect:
     uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@v1
@@ -51,13 +58,39 @@ at least the permissions the called workflow declares. Get either wrong and
 GitHub refuses to start the run — `startup_failure`, zero jobs, nothing to
 read.
 
-Grant those permissions per job, not once at the top: a job-level block
+Grant those permissions per job, not once at the top. A job-level block
 replaces the workflow-level one rather than merging with it, so a restrictive
-workflow-level floor plus a per-job minimum keeps `pipeline`, `detect`, and
-any summary job on a read-only token while `release` gets what it needs. The
-per-workflow minimums, and the secret each workflow actually consumes, are in
-[`templates/README.md`](templates/README.md); `bin/check-caller-contract.ts`
-enforces both rules on every PR.
+workflow-level floor plus a per-job minimum keeps read-only jobs read-only. The
+per-workflow minimums are in [`templates/README.md`](templates/README.md), and
+`bin/check-caller-contract.ts` enforces them on every PR.
+
+### Pipeline policy
+
+`call-pipeline.yml` is the predictable PR/release validation path. It runs the
+repository's ordinary routines rather than exposing arbitrary Nx orchestration.
+
+Its public routine controls are:
+
+- `build_mode`, `test_mode`, `docs_mode`: `skip | report | abort_on_error`;
+- `check_mode`: `fix | check | skip`;
+- `api_report_mode`: `update | check | skip`;
+- `lockfile_mode`: `frozen | reconcile`.
+
+The pipeline no longer exposes `use_nx_affected`, free-form `nx_targets`, Nx
+cache reset, `nx fix-ci`, `pnpm_cache`, or a per-run Nx Cloud switch. Nx Cloud
+is repository policy through `vars.DISABLE_NX_CLOUD`.
+
+For arbitrary Nx target execution, use `call-nx-targets.yml` or the synced
+**Dispatch Nx Targets** workflow. Its contract is deliberately small:
+
+```yaml
+scope: all | affected
+targets: "lint test build"
+mode: report | abort_on_error
+```
+
+Nx `affected` is an execution optimization only; it does not imply release
+intent or publish selection.
 
 ### Composite Actions
 
@@ -77,53 +110,32 @@ Callers must install dependencies before using actions that invoke `snail-sh`:
 
 ```yaml
 - uses: pnpm/action-setup@v6
-- uses: actions/setup-node@v4
+- uses: actions/setup-node@v7
   with:
-    node-version: lts/*
+    node-version: '24'
 - run: pnpm install --frozen-lockfile
 ```
 
-The `snail-sh` CLI ships as part of `@snailicid3/config` (the `bin/` directory is published to npm). Any project with `@snailicid3/config` in its dependencies will have it available via `pnpm exec snail-sh`.
+The `snail-sh` CLI ships as part of `@snailicid3/config`. Any project with
+`@snailicid3/config` in its dependencies has it via `pnpm exec snail-sh`.
 
 ### Caller workflow templates
 
 GitHub can only share `workflow_call` workflows across repositories — the thin
 trigger workflows (`dispatch-*`, `pr-checks`, `push-main`, `push-release`) must
-physically exist in every repo. The canonical copies live in
-[`templates/workflows/`](templates/workflows/): to onboard or update a repo,
-copy them into `<your-repo>/.github/workflows/` verbatim. The contract those
-callers have to honour is documented in
-[`templates/README.md`](templates/README.md).
+physically exist in every repo. Canonical copies live in
+[`templates/workflows/`](templates/workflows/).
 
-```sh
-cp path/to/snailicid3-actions/templates/workflows/*.yml .github/workflows/
-```
-
-To stamp all local clones at once, use the sync script:
+To stamp local clones:
 
 ```sh
 bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
-bin/sync-callers.sh --check ../snailicid3   # writes nothing; fails on drift
+bin/sync-callers.sh --check ../snailicid3
 ```
 
-**Planned (not yet built): auto-PR sync.** Once the template set stabilizes, a
-`dispatch-sync-callers.yml` workflow in this repository will propagate template
-changes automatically: triggered on pushes to `main` touching `templates/**`
-(plus manual dispatch), a matrix job per consumer repo checks the repo out,
-runs the same sync, commits with a scope-commit-derived message, and opens a PR
-in that repo. It needs the `GH_PAT` secret with `workflow` scope — the default
-`GITHUB_TOKEN` cannot push workflow files to other repositories. Deferred
-deliberately until the migration dust settles.
-
-Behavior is controlled by explicit workflow inputs, following the repo
-pattern: every `call-*` input has a matching `dispatch-*` input for manual
-runs, and the triggered callers (`pr-checks`, `push-*`) pass the same inputs
-with values written in the file. Templates carry no repo-specific values, so every consumer gets a byte-identical copy. Secrets
-(`NPM_TOKEN`, `GH_PAT`) are forwarded by name from
-each caller job to the workflow that declares them, so a template only names
-the secrets that template's calls actually consume; the `DISABLE_NX_CLOUD`
-repository variable remains the one vars-based switch (pre-existing Nx Cloud
-policy).
+Templates carry no repo-specific values. Secrets (`NPM_TOKEN`, `GH_PAT`) are
+forwarded by name only where the called workflow declares them. The
+`DISABLE_NX_CLOUD` repository variable remains the vars-based Nx Cloud policy.
 
 ### Chromatic
 
@@ -131,120 +143,76 @@ Chromatic is a **composite action**, not part of `call-pipeline.yml`, and that
 is deliberate.
 
 `workflow_call.secrets` has no dynamic form: a reusable workflow can only
-receive secrets under names it declares literally. So running Chromatic inside
-the shared pipeline meant this repository listing every consumer's project
-token by name, and a new Storybook project in an unrelated repository became an
-edit and a `v1` re-tag here. A composite action has no such contract — the
-caller sets `env:` in its own workflow with whatever names it likes.
+receive secrets under names it declares literally. Running Chromatic inside
+the shared pipeline would require this repository to know every consumer's
+project-token names. Instead, the consumer sets its own job-level `env:` and
+uses the shared `run-chromatic` action.
 
-So `run-chromatic` owns the step policy (`skip`, `report`, `abort_on_error`)
-and the single `pnpm exec nx run-many -t chromatic` that covers every project;
-the consumer owns which projects exist, which token each one reads, and each
-project's Chromatic CLI flags. Projects without the target are skipped by Nx,
-and projects with different tokens still publish from one invocation.
+`run-chromatic` owns the step policy (`skip`, `report`, `abort_on_error`) and a
+single `pnpm exec nx run-many -t chromatic`; the consumer owns which projects
+exist, which token each reads, and each project's Chromatic CLI flags.
 
-Add a Chromatic workflow to the consumer repository — it is **not** a synced
-template, because the token names are repository-specific. See
-[`templates/README.md`](templates/README.md) for a complete example and the
-matching package target.
+See [`templates/README.md`](templates/README.md) for the consumer-owned workflow
+example.
 
 ### Lockfiles
 
-`pnpm-lock.yaml` is only ever rewritten when a caller asks for it. Every
-workflow that installs takes `lockfile_mode`:
+`pnpm-lock.yaml` is only rewritten when a caller asks for it. Every workflow
+that installs uses `lockfile_mode`:
 
 | `lockfile_mode` | Behaviour |
 | --- | --- |
-| `frozen` (default) | `pnpm install --frozen-lockfile`. A lockfile that no longer satisfies the manifests fails the run, with an error naming the repair route. Nothing is rewritten. |
-| `reconcile` | `pnpm install --no-frozen-lockfile`. The existing lockfile is updated as needed to satisfy the manifests. Not a reset: the lockfile is not deleted and resolved from scratch. |
-
-This replaces an implicit fallback. The pipeline used to try a frozen install
-and, on failure, silently retry unfrozen — so ordinary PR and release
-validation could rewrite `pnpm-lock.yaml` as a side effect, with nothing in the
-run saying so. Validation now refuses instead, and the pipeline summary reports
-both the mode and whether the lockfile actually changed.
+| `frozen` (default) | `pnpm install --frozen-lockfile`. A stale lockfile fails; nothing is rewritten. |
+| `reconcile` | `pnpm install --no-frozen-lockfile`. The existing lockfile is updated as needed to satisfy manifests; it is not deleted and resolved from scratch. |
 
 To repair a stale lockfile deliberately, run **Dispatch Workspace Update** with
-`repair_lockfile` enabled: it is a selected maintenance routine like fix, docs,
-or API report, so it satisfies the guard on its own, and the reconciled
-lockfile travels in the workspace artifact and is committed with the rest.
-
-Destructive reset / fresh re-resolution is a separate concern and is not
-offered here.
+`repair_lockfile` enabled. Destructive reset / fresh re-resolution is separate
+and is not offered here.
 
 ## Commit message convention
 
-Every commit these workflows create (and every PR title they generate) is derived
-the same way `pnpm commit:<type> "message"` derives it locally: the scope is
-computed from the changed files by `scope-commit`, never hardcoded.
+Every commit these workflows create, and every PR title they generate, is
+derived the same way `pnpm commit:<type> "message"` is derived locally: scope
+comes from changed files through `scope-commit`.
 
 ```sh
 pnpm exec scope-commit --staged --message <type> "<subject>"
 ```
 
-- `call-apply-workspace-artifact.yml` recomputes the scope when
-  `scoped_commit_message: true` is passed (dependencies are installed before the
-  commit step so `scope-commit` can resolve).
+- `call-apply-workspace-artifact.yml` recomputes scope when
+  `scoped_commit_message: true` is passed.
 - `call-release-plan.yml` derives the version commit message via `scope-commit`
-  and reuses that message as the version PR title. The changeset slug appears
-  only in the release branch name (`release/<slug>`).
-- If scope derivation fails, the run emits a `::warning::` annotation and falls
-  back — never silently.
+  and reuses it as the version PR title.
+- If scope derivation fails, the run emits a warning and falls back explicitly.
 
 ## Repository layout rules
 
-- Reusable (`workflow_call`) workflows must live directly in `.github/workflows/`
-  — a hard GitHub limitation, no subdirectories.
-- Composite actions could live anywhere in the repo, but they are kept under
-  `.github/actions/` next to their scripts in `.github/scripts/`.
-- Inside the reusable `call-*` workflows, composite actions are referenced
-  **fully qualified** (`gbtunney/snailicid3-actions/.github/actions/<name>@v1`).
-  A local `./.github/actions/...` reference inside a reusable workflow resolves
-  against the *caller's* checkout and breaks every cross-repo consumer.
-- Two Node versions are in play and they are unrelated. The `node_version`
-  input picks the Node the *workspace* builds and tests with. The major pinned
-  on an official action (`actions/checkout@v7`) picks the Node runtime GitHub
-  executes that *action's own* JavaScript on. A deprecation warning about the
-  action runtime is never fixed by changing `node_version`, and pinning a
-  newer action major does not change what the build runs on.
+- Reusable (`workflow_call`) workflows live directly in `.github/workflows/`.
+- Composite actions live under `.github/actions/`, with scripts under
+  `.github/scripts/`.
+- Two Node versions are unrelated: `node_version` selects the Node used to
+  build/test the repository, while the major of `actions/checkout@v7` or
+  `actions/setup-node@v7` selects the runtime bundled by that GitHub Action.
 
 ## Self-tests
 
-`test-actions.yml` runs on every PR and push to `main`. It installs the fixture
-workspace (the root `package.json`, which depends on the published
-`@snailicid3/config`) and exercises:
-
-- all five composite actions (with local `./` refs, so the branch under test is
-  what runs),
-- `call-detect-release-state.yml` (asserting the fixture resolves to
-  `should_skip=true`),
-- `call-apply-workspace-artifact.yml` (overlaying a generated artifact and
-  asserting dirty-state detection),
-- `call-release-plan.yml` in dry-run mode,
-- `scope-commit` message derivation,
-- the caller contract (`pnpm check:callers`, `bin/check-caller-contract.ts`)
-  against the reusable workflows, the templates, and a consumer synced fresh
-  from those templates — plus `pnpm test:callers`, which proves the checker
-  still rejects each mistake it claims to catch, and `bin/sync-callers.sh
-  --check`, including its orphaned-template case.
+`test-actions.yml` runs on every PR and push to `main`. It exercises the
+composite actions, reusable release workflows, scope-commit derivation,
+lockfile policy, caller contracts, template sync/drift/orphan detection, and
+YAML parsing.
 
 ### Cross-repository smoke
 
-Same-repository refs cannot reach the boundary that breaks consumers: a remote
-`<owner>/<repo>/...@<ref>` call, where a wrong secret or permission contract
-makes GitHub refuse to start the run (`startup_failure`, zero jobs) instead of
-failing a job. Two workflows call the reusable workflows through that remote
-path, read-only:
+Same-repository refs cannot exercise the boundary that breaks consumers: a
+remote `<owner>/<repo>/...@<ref>` call can fail before any job starts. Two
+workflows test that boundary:
 
-- **Smoke Cross-Repo (main)** — on pushes to `main` that touch workflows or
-  templates, and on demand.
-- **Smoke Cross-Repo (v1)** — weekly and on demand, against the tag consumers
-  pin. Dispatch it after moving `v1`.
+- **Smoke Cross-Repo (main)** — on workflow/template changes to `main` and on
+  demand. It covers release-plan, pipeline, and the Nx-target utility.
+- **Smoke Cross-Repo (v1)** — weekly and on demand against the tag consumers
+  pin. Its caller uses only inputs shared across the tag-transition boundary;
+  dispatch it again after promoting `v1`.
 
-They are separate files from `test-actions.yml`, and from each other, because a
-startup failure takes down an entire run: a broken published tag must not be
-able to erase the other suites' signal.
-
-> Note: the `call-*` workflows reference composite actions with `$/`, so each
-composite action resolves from the same repository commit as the reusable
-workflow that invoked it. This keeps tagged workflow releases self-contained.
+The `v1` tag is promoted only after the new `main` contract is known-good;
+consumer caller sync happens after that promotion so synced templates never
+reference inputs the published tag does not yet declare.

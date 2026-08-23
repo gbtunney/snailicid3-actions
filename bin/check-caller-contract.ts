@@ -159,6 +159,11 @@ interface DeclaredSecret {
     required: boolean
 }
 
+/** An input declared under `on.workflow_call.inputs`. */
+interface DeclaredInput {
+    required: boolean
+}
+
 /** A job that calls another workflow, and the contract it passes along. */
 interface CallerJob {
     id: string
@@ -170,7 +175,7 @@ interface CallerJob {
     inheritsSecrets: boolean
     /** Secret names forwarded by name, or null when no `secrets:` block exists. */
     forwarded: string[] | null
-    /** Literal `with:` values, used to spot inputs that imply a secret. */
+    /** Literal `with:` keys/values, checked against the callee's declared inputs. */
     inputs: Record<string, string>
     /** Job-level permissions, which replace the workflow-level block entirely. */
     permissions: Record<string, string> | null
@@ -180,6 +185,7 @@ interface CallerJob {
 export interface Workflow {
     path: string
     declared: Map<string, DeclaredSecret>
+    declaredInputs: Map<string, DeclaredInput>
     /** Secrets actually referenced in workflow content, comments excluded. */
     referenced: Set<string>
     jobs: CallerJob[]
@@ -198,6 +204,14 @@ export const loadWorkflow = (path: string): Workflow => {
     for (const secret of directChildren(nodes, declaredIndex)) {
         const required = directChildren(nodes, secret.index).find((node) => node.key === 'required')
         declared.set(secret.key, { required: required?.value === 'true' })
+    }
+
+    const declaredInputsIndex = childIndex(nodes, workflowCallIndex, 'inputs')
+    const declaredInputs = new Map<string, DeclaredInput>()
+
+    for (const input of directChildren(nodes, declaredInputsIndex)) {
+        const required = directChildren(nodes, input.index).find((node) => node.key === 'required')
+        declaredInputs.set(input.key, { required: required?.value === 'true' })
     }
 
     const referenced = new Set(
@@ -232,6 +246,7 @@ export const loadWorkflow = (path: string): Workflow => {
     return {
         path,
         declared,
+        declaredInputs,
         referenced,
         jobs,
         permissions: readPermissions(nodes, topLevelIndex(nodes, 'permissions')),
@@ -317,6 +332,21 @@ const checkCallerWorkflow = (
         if (!called) {
             fail(job.usesLine, `job "${job.id}" calls unknown workflow ${target.file}`)
             continue
+        }
+
+        for (const input of Object.keys(job.inputs)) {
+            if (!called.declaredInputs.has(input)) {
+                fail(
+                    job.line,
+                    `job "${job.id}" passes input ${input}, which ${target.file} does not declare`,
+                )
+            }
+        }
+
+        for (const [input, declaration] of called.declaredInputs) {
+            if (declaration.required && !(input in job.inputs)) {
+                fail(job.line, `job "${job.id}" omits input ${input}, required by ${target.file}`)
+            }
         }
 
         const forwarded = job.forwarded ?? []

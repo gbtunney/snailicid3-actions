@@ -3,16 +3,12 @@
 # TYPE: reusable (workflow_call)
 # SOURCE: gbtunney/snailicid3-actions
 #
-# Secrets contract:
-#   None. This workflow reads no secrets at all.
+# Normal PR/release validation uses predictable repository routines. Arbitrary
+# Nx target execution lives in call-nx-targets.yml instead of competing with
+# this pipeline's build/test/check/docs behavior.
 #
-#   Chromatic used to live here, which forced this shared repository to declare
-#   every consumer's project token by literal name — `workflow_call.secrets`
-#   has no dynamic form. That made adding a Storybook project in an unrelated
-#   repository an edit and a re-tag here. Chromatic now ships as the
-#   run-chromatic composite action, which has no static secret contract: a
-#   consumer sets whatever token variables its projects read as job-level env
-#   in its own workflow. See templates/README.md.
+# Chromatic is intentionally outside this workflow. Consumers own their token
+# names and Chromatic workflow and may use the shared run-chromatic composite.
 # ─────────────────────────────────────────────────────────────
 
 name: z Pipeline 🚰
@@ -27,103 +23,72 @@ on:
                 type: string
 
             mode:
+                description: Failure policy for reporting/check/API routines.
                 required: false
                 default: report
                 type: string
 
             check_mode:
+                description: Check operation to run.
                 required: false
                 default: check
                 type: string
 
             api_report_mode:
+                description: API report operation to run.
                 required: false
                 default: skip
                 type: string
 
             lockfile_mode:
                 description: >
-                    How the install treats pnpm-lock.yaml. frozen installs exactly what the lockfile
-                    says and fails when it no longer satisfies the manifests — validation never
-                    rewrites it. reconcile runs a non-frozen install, which updates the existing
-                    lockfile as needed to satisfy the manifests. reconcile is not a reset: it does
-                    not delete the lockfile and resolve from scratch.
+                    How the install treats pnpm-lock.yaml. frozen never rewrites it;
+                    reconcile updates the existing lockfile as needed to satisfy manifests.
                 required: false
                 default: frozen
                 type: string
 
-            run_build:
+            build_mode:
+                description: Build behavior — skip, report, or abort_on_error.
                 required: false
-                default: true
-                type: boolean
+                default: report
+                type: string
 
-            run_test:
+            test_mode:
+                description: Test behavior — skip, report, or abort_on_error.
                 required: false
-                default: false
-                type: boolean
+                default: skip
+                type: string
 
-            run_docs_build:
+            docs_mode:
+                description: Docs-build behavior — skip, report, or abort_on_error.
                 required: false
-                default: false
-                type: boolean
+                default: skip
+                type: string
 
             require_clean_repo:
+                description: Fail if repository routines leave tracked changes.
                 required: false
                 default: false
                 type: boolean
 
             upload_workspace_artifact:
+                description: Upload a workspace snapshot for an explicit downstream operation.
                 required: false
                 default: false
                 type: boolean
 
             artifact_name_prefix:
+                description: Prefix for an explicitly requested workspace artifact.
                 required: false
                 default: workspace
                 type: string
 
             node_version:
-                description: Node version to run the pipeline with. Prefer a
-                    concrete major (e.g. '24') over an alias like 'lts/*' so
-                    setup-node resolves from the runner toolcache instead of
-                    fetching GitHub's version manifest over the network.
+                description: Node version for compatibility-sensitive callers such as the smoke matrix.
                 required: false
                 default: '24'
                 type: string
-
-            nx_cache_reset:
-                required: false
-                default: false
-                type: boolean
-
-            pnpm_cache:
-                required: false
-                default: true
-                type: boolean
-
-            disable_nx_cloud:
-                description: Disable Nx Cloud policy (true|false|vars) for this run.
-                required: false
-                default: 'vars'
-                type: string
-
-            use_nx_affected:
-                description: Run nx affected instead of full workspace build/test/check routines.
-                required: false
-                default: false
-                type: boolean
-
-            nx_targets:
-                description: Space-delimited Nx targets for affected mode.
-                required: false
-                default: lint test build
-                type: string
-
-            nx_fix_ci:
-                description: Run nx fix-ci after main steps (Nx Cloud self-healing CI).
-                required: false
-                default: false
-                type: boolean
 
         outputs:
             is_repo_dirty:
@@ -143,13 +108,12 @@ permissions:
 
 env:
     HUSKY: 0
+    NX_NO_CLOUD: 'true'
 
 jobs:
     pipeline:
         runs-on: ubuntu-latest
         name: pipeline
-        env:
-            NX_NO_CLOUD: 'true'
 
         outputs:
             is_repo_dirty: ${{ steps.repo_dirty.outputs.is_repo_dirty }}
@@ -170,67 +134,77 @@ jobs:
             - uses: actions/setup-node@v7
               with:
                   node-version: ${{ inputs.node_version }}
-                  cache: ${{ inputs.pnpm_cache && 'pnpm' || '' }}
+                  cache: pnpm
                   cache-dependency-path: pnpm-lock.yaml
 
-            - name: 🔧 Resolve Nx Cloud Policy
+            - name: Validate pipeline policy
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  case "${{ inputs.mode }}" in
+                    report|abort_on_error) ;;
+                    *) echo "::error::Invalid mode: ${{ inputs.mode }}. Expected report or abort_on_error."; exit 1 ;;
+                  esac
+
+                  case "${{ inputs.check_mode }}" in
+                    fix|check|skip) ;;
+                    *) echo "::error::Invalid check_mode: ${{ inputs.check_mode }}. Expected fix, check, or skip."; exit 1 ;;
+                  esac
+
+                  case "${{ inputs.api_report_mode }}" in
+                    update|check|skip) ;;
+                    *) echo "::error::Invalid api_report_mode: ${{ inputs.api_report_mode }}. Expected update, check, or skip."; exit 1 ;;
+                  esac
+
+                  case "${{ inputs.lockfile_mode }}" in
+                    frozen|reconcile) ;;
+                    *) echo "::error::Invalid lockfile_mode: ${{ inputs.lockfile_mode }}. Expected frozen or reconcile."; exit 1 ;;
+                  esac
+
+                  for routine_mode in "${{ inputs.build_mode }}" "${{ inputs.test_mode }}" "${{ inputs.docs_mode }}"; do
+                    case "$routine_mode" in
+                      skip|report|abort_on_error) ;;
+                      *) echo "::error::Invalid routine mode: $routine_mode. Expected skip, report, or abort_on_error."; exit 1 ;;
+                    esac
+                  done
+
+            - name: Resolve Nx Cloud policy
               id: nx_cloud_policy
               shell: bash
               run: |
                   set -euo pipefail
-                  input_value="${{ inputs.disable_nx_cloud }}"
-                  variable_value="${{ vars.DISABLE_NX_CLOUD || '' }}"
-                  if [ "$input_value" = "vars" ]; then input_value=""; fi
-                  if [ -n "$input_value" ]; then
-                    policy_source="input:disable_nx_cloud"
-                    effective_disable_nx_cloud="$input_value"
-                  elif [ -n "$variable_value" ]; then
-                    policy_source="vars.DISABLE_NX_CLOUD"
-                    effective_disable_nx_cloud="$variable_value"
-                  else
-                    policy_source="fallback-default"
-                    effective_disable_nx_cloud="true"
+                  value="$(printf '%s' "${{ vars.DISABLE_NX_CLOUD || 'true' }}" | tr '[:upper:]' '[:lower:]')"
+                  if [[ "$value" != "true" && "$value" != "false" ]]; then
+                    echo "::warning::Invalid vars.DISABLE_NX_CLOUD value '$value'; defaulting to true."
+                    value="true"
                   fi
-                  effective_disable_nx_cloud="$(printf '%s' "$effective_disable_nx_cloud" | tr '[:upper:]' '[:lower:]')"
-                  if [ "$effective_disable_nx_cloud" != "true" ] && [ "$effective_disable_nx_cloud" != "false" ]; then
-                    echo "::warning::Invalid Nx Cloud policy '$effective_disable_nx_cloud'. Falling back to true (disabled)."
-                    effective_disable_nx_cloud="true"
-                    policy_source="fallback-invalid"
-                  fi
-                  echo "effective_disable_nx_cloud=$effective_disable_nx_cloud" >> "$GITHUB_OUTPUT"
-                  echo "policy_source=$policy_source" >> "$GITHUB_OUTPUT"
+                  echo "disabled=$value" >> "$GITHUB_OUTPUT"
 
-            - name: 🌸 Input Summary
+            - name: Enable Nx Cloud
+              if: ${{ steps.nx_cloud_policy.outputs.disabled == 'false' }}
+              run: echo "NX_NO_CLOUD=false" >> "$GITHUB_ENV"
+
+            - name: Pipeline summary
               shell: bash
               run: |
                   {
-                    echo "## Pipeline inputs"
+                    echo "## Pipeline policy"
                     echo ""
                     echo "- checkout_ref: \`${{ inputs.checkout_ref || github.ref }}\`"
                     echo "- mode: \`${{ inputs.mode }}\`"
                     echo "- check_mode: \`${{ inputs.check_mode }}\`"
                     echo "- api_report_mode: \`${{ inputs.api_report_mode }}\`"
                     echo "- lockfile_mode: \`${{ inputs.lockfile_mode }}\`"
+                    echo "- build_mode: \`${{ inputs.build_mode }}\`"
+                    echo "- test_mode: \`${{ inputs.test_mode }}\`"
+                    echo "- docs_mode: \`${{ inputs.docs_mode }}\`"
                     echo "- require_clean_repo: \`${{ inputs.require_clean_repo }}\`"
-                    echo "- run_build: \`${{ inputs.run_build }}\`"
-                    echo "- run_test: \`${{ inputs.run_test }}\`"
-                    echo "- run_docs_build: \`${{ inputs.run_docs_build }}\`"
-                    echo "- disable_nx_cloud (resolved): \`${{ steps.nx_cloud_policy.outputs.effective_disable_nx_cloud }}\`"
                     echo "- upload_workspace_artifact: \`${{ inputs.upload_workspace_artifact }}\`"
-                    echo "- use_nx_affected: \`${{ inputs.use_nx_affected }}\`"
-                    echo "- nx_targets: \`${{ inputs.nx_targets }}\`"
+                    echo "- Nx Cloud disabled: \`${{ steps.nx_cloud_policy.outputs.disabled }}\`"
                   } | tee -a "$GITHUB_STEP_SUMMARY"
 
-            - name: 🚦 Validate lockfile mode
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  case "${{ inputs.lockfile_mode }}" in
-                    frozen|reconcile) ;;
-                    *) echo "::error::Invalid lockfile_mode: ${{ inputs.lockfile_mode }}. Expected frozen or reconcile."; exit 1 ;;
-                  esac
-
-            - name: 🔒 Record lockfile fingerprint
+            - name: Record lockfile fingerprint
               id: lockfile_before
               shell: bash
               run: |
@@ -241,186 +215,132 @@ jobs:
                     echo "sha=absent" >> "$GITHUB_OUTPUT"
                   fi
 
-            # No fallback. A frozen install that fails used to silently retry
-            # unfrozen, which rewrote pnpm-lock.yaml as a side effect of
-            # ordinary validation — the caller never asked for that and the run
-            # never said it happened.
-            - name: 📦 Install (frozen lockfile)
+            - name: Install frozen lockfile
               if: ${{ inputs.lockfile_mode == 'frozen' }}
               shell: bash
               run: |
                   set -euo pipefail
-
                   if pnpm install --frozen-lockfile; then
                     exit 0
                   fi
-
-                  # pnpm's own error is above and is the diagnosis. A frozen
-                  # install also fails on registry, auth and network problems,
-                  # so the hint below is conditional rather than a verdict.
-                  echo "::error::pnpm install --frozen-lockfile failed — see pnpm's error above. If it is an outdated-lockfile error, reconcile the lockfile deliberately: run Workspace Update with repair_lockfile enabled, or call this workflow with lockfile_mode: reconcile. Validation never rewrites pnpm-lock.yaml on its own."
+                  echo "::error::pnpm install --frozen-lockfile failed — see pnpm's error above. If it is an outdated-lockfile error, use the explicit reconcile route. Validation never rewrites pnpm-lock.yaml on its own."
                   exit 1
 
-            - name: 📦 Install (reconcile lockfile)
+            - name: Install and reconcile lockfile
               if: ${{ inputs.lockfile_mode == 'reconcile' }}
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  echo "lockfile_mode=reconcile: pnpm-lock.yaml may be updated to satisfy the manifests."
-                  pnpm install --no-frozen-lockfile
+              run: pnpm install --no-frozen-lockfile
 
-            - name: 🔒 Report lockfile change
+            - name: Report lockfile change
               id: lockfile_after
               if: ${{ always() }}
               shell: bash
               run: |
                   set -euo pipefail
-
                   before="${{ steps.lockfile_before.outputs.sha }}"
                   after="absent"
                   if [[ -f pnpm-lock.yaml ]]; then
                     after="$(shasum -a 256 pnpm-lock.yaml | cut -d' ' -f1)"
                   fi
-
                   if [[ "$before" == "$after" ]]; then
                     echo "lockfile_changed=false" >> "$GITHUB_OUTPUT"
-                    echo "pnpm-lock.yaml is unchanged."
                   else
                     echo "lockfile_changed=true" >> "$GITHUB_OUTPUT"
-                    echo "pnpm-lock.yaml was updated by the ${{ inputs.lockfile_mode }} install."
                   fi
 
-            - uses: nrwl/nx-set-shas@v5
-              if: ${{ inputs.use_nx_affected }}
-
-            - name: ⚡ Enable Nx Cloud
-              if: ${{ steps.nx_cloud_policy.outputs.effective_disable_nx_cloud == 'false' }}
-              run: echo "NX_NO_CLOUD=false" >> "$GITHUB_ENV"
-
-            # ── Reporting ────────────────────────────
-            - name: 🩺 Report Environment
+            - name: Report environment
               if: ${{ always() }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               uses: $/.github/actions/report-environment
 
-            - name: 🗂️ Report Repository
-              id: repo_report
+            - name: Report repository
               if: ${{ always() }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               uses: $/.github/actions/report-repository
 
-            - name: ✨ Report Prettier
+            - name: Report Prettier
               if: ${{ always() }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               uses: $/.github/actions/report-prettier
 
-            - name: 📦 Report Workspace
+            - name: Report workspace
               if: ${{ always() }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               uses: $/.github/actions/report-workspace
 
-            - name: 🧱 Nx Report
+            - name: Nx report
               if: ${{ always() }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               run: pnpm exec nx report
 
-            - name: 🧹 Reset Nx Cache
-              if: ${{ inputs.nx_cache_reset }}
-              continue-on-error: ${{ inputs.mode == 'report' }}
-              run: pnpm nx:reset
-
-            - name: 🎯 Run Nx Affected
-              if: ${{ inputs.use_nx_affected }}
-              continue-on-error: ${{ inputs.mode == 'report' }}
-              run: pnpm exec nx affected -t ${{ inputs.nx_targets }}
-
-            - name: 🏗️ Run Build
-              if: ${{ inputs.run_build && !inputs.use_nx_affected }}
-              continue-on-error: ${{ inputs.mode == 'report' }}
+            - name: Run build
+              if: ${{ inputs.build_mode != 'skip' }}
+              continue-on-error: ${{ inputs.build_mode == 'report' }}
               run: pnpm build
 
-            - name: 🧪 Run Test
-              if: ${{ inputs.run_test && !inputs.use_nx_affected }}
-              continue-on-error: ${{ inputs.mode == 'report' }}
+            - name: Run test
+              if: ${{ inputs.test_mode != 'skip' }}
+              continue-on-error: ${{ inputs.test_mode == 'report' }}
               run: pnpm test
 
-            - name: 📘 Run Docs Build
-              if: ${{ inputs.run_docs_build && !inputs.use_nx_affected }}
-              continue-on-error: ${{ inputs.mode == 'report' }}
+            - name: Run docs build
+              if: ${{ inputs.docs_mode != 'skip' }}
+              continue-on-error: ${{ inputs.docs_mode == 'report' }}
               run: pnpm run docs:build
 
-            - name: ✨ Run Fix Routine
-              if: ${{ inputs.check_mode == 'fix' && !inputs.use_nx_affected }}
+            - name: Run fix routine
+              if: ${{ inputs.check_mode == 'fix' }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               run: pnpm fix
 
-            - name: ✅ Run Check Routine
-              if: ${{ inputs.check_mode == 'check' && !inputs.use_nx_affected }}
+            - name: Run check routine
+              if: ${{ inputs.check_mode == 'check' }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               run: pnpm check
 
-            - name: ⏭️ Skip Check Routine
-              if: ${{ inputs.check_mode == 'skip' && !inputs.use_nx_affected }}
-              run: echo "check_mode=skip"
-
-            - name: ✨ Run Update Api Report
-              if: ${{ inputs.api_report_mode == 'update' && !inputs.use_nx_affected }}
+            - name: Run update API report
+              if: ${{ inputs.api_report_mode == 'update' }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               run: pnpm api:report
 
-            - name: ✅ Run Check Api Report
-              if: ${{ inputs.api_report_mode == 'check' && !inputs.use_nx_affected }}
+            - name: Run check API report
+              if: ${{ inputs.api_report_mode == 'check' }}
               continue-on-error: ${{ inputs.mode == 'report' }}
               run: pnpm api:check
 
-            - name: ⏭️ Skip Api Report
-              if: ${{ inputs.api_report_mode == 'skip' && !inputs.use_nx_affected }}
-              run: echo "api_report_mode=skip"
-
-            - name: 🤖 Nx Fix CI
-              if: ${{ inputs.nx_fix_ci && steps.nx_cloud_policy.outputs.effective_disable_nx_cloud == 'false' }}
-              run: pnpm exec nx fix-ci
-
-            - name: 🧼 Check repository dirty state
+            - name: Check repository dirty state
               id: repo_dirty
               if: ${{ always() }}
               shell: bash
               run: |
-                  if [ -n "$(git status --porcelain)" ]; then
+                  if [[ -n "$(git status --porcelain)" ]]; then
                     echo "is_repo_dirty=true" >> "$GITHUB_OUTPUT"
-                    echo "Repository is dirty:"
                     git status --short
                   else
                     echo "is_repo_dirty=false" >> "$GITHUB_OUTPUT"
                   fi
 
-            - name: 🚨 Require clean repository
+            - name: Require clean repository
               if: ${{ inputs.require_clean_repo && steps.repo_dirty.outputs.is_repo_dirty == 'true' }}
               run: |
                   echo "Repository is dirty after pipeline."
                   exit 1
 
-            - name: 🏷️ Compute artifact name
+            - name: Compute artifact name
               id: artifact_name
               if: ${{ always() && inputs.upload_workspace_artifact }}
               shell: bash
               run: |
-                  NAME="${{ inputs.artifact_name_prefix }}-${{ github.repository }}-${{ github.run_id }}-${{ github.run_attempt }}"
-                  NAME="${NAME//\//-}"
-                  echo "name=$NAME" >> "$GITHUB_OUTPUT"
+                  name="${{ inputs.artifact_name_prefix }}-${{ github.repository }}-${{ github.run_id }}-${{ github.run_attempt }}"
+                  name="${name//\//-}"
+                  echo "name=$name" >> "$GITHUB_OUTPUT"
 
-            - name: 📦 Create workspace snapshot
+            - name: Create workspace snapshot
               id: workspace_snapshot
               if: ${{ always() && inputs.upload_workspace_artifact }}
               shell: bash
               run: |
-                  ARCHIVE_PATH="${{ runner.temp }}/workspace-artifact.tar.gz"
-                  # .env files are excluded so a token written for a local or
-                  # CI Chromatic run cannot ride along into a downloadable
-                  # artifact. .gitignore does not apply here — tar does not read
-                  # it — and .env.example is git-tracked, so the overlay's own
-                  # checkout still has it.
-                  tar -czf "$ARCHIVE_PATH" \
+                  archive_path="${{ runner.temp }}/workspace-artifact.tar.gz"
+                  tar -czf "$archive_path" \
                     --exclude='.git' \
                     --exclude='.env*' \
                     --exclude='**/.env*' \
@@ -430,9 +350,9 @@ jobs:
                     --exclude='**/coverage' \
                     --exclude='**/.turbo' \
                     .
-                  echo "archive_path=$ARCHIVE_PATH" >> "$GITHUB_OUTPUT"
+                  echo "archive_path=$archive_path" >> "$GITHUB_OUTPUT"
 
-            - name: 📤 Upload workspace snapshot
+            - name: Upload workspace snapshot
               id: upload_workspace
               if: ${{ always() && inputs.upload_workspace_artifact }}
               uses: actions/upload-artifact@v7
@@ -441,25 +361,20 @@ jobs:
                   if-no-files-found: error
                   path: ${{ steps.workspace_snapshot.outputs.archive_path }}
 
-            - name: 🧾 Mark artifact uploaded
+            - name: Mark artifact uploaded
               id: artifact_uploaded
               if: ${{ always() }}
               shell: bash
               run: |
-                  if [ "${{ inputs.upload_workspace_artifact }}" = "true" ] &&
-                    [ "${{ steps.upload_workspace.outcome }}" = "success" ]; then
+                  if [[ "${{ inputs.upload_workspace_artifact }}" == "true" && "${{ steps.upload_workspace.outcome }}" == "success" ]]; then
                     echo "artifact_uploaded=true" >> "$GITHUB_OUTPUT"
                   else
                     echo "artifact_uploaded=false" >> "$GITHUB_OUTPUT"
                   fi
 
-            - name: 🗂️ Repository Status
-              id: repository_status
+            - name: Output summary
               if: ${{ always() }}
-              uses: $/.github/actions/report-repository
-
-            - name: 📝 Output Summary
-              if: ${{ always() }}
+              shell: bash
               run: |
                   {
                     echo ""
@@ -471,7 +386,3 @@ jobs:
                     echo "- artifact_uploaded: \`${{ steps.artifact_uploaded.outputs.artifact_uploaded }}\`"
                     echo "- workspace_artifact_name: \`${{ steps.artifact_name.outputs.name }}\`"
                   } >> "$GITHUB_STEP_SUMMARY"
-
-            - name: ✅ Done
-              if: ${{ always() }}
-              run: echo "Pipeline workflow completed."

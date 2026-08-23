@@ -7,7 +7,7 @@ are the source of truth and are copied verbatim:
 
 ```sh
 bin/sync-callers.sh ../snailicid3 ../gbt-template-boilerplate ../gbt-schema-form
-bin/sync-callers.sh --check ../snailicid3           # fail on drift, write nothing
+bin/sync-callers.sh --check ../snailicid3
 ```
 
 ## The caller contract
@@ -34,15 +34,13 @@ jobs:
 ```
 
 `secrets: inherit` hands a workflow in another repository the caller's entire
-secret set through a contract nobody wrote down, and it is the one thing about
-a cross-repository call that cannot be reviewed by reading either file. Named
-forwarding is also what makes the boundary testable: the checker can compare
-what a caller sends against what the called workflow declares.
+secret set through a contract nobody wrote down. Named forwarding also makes
+the boundary testable: the checker can compare what a caller sends against
+what the called workflow declares.
 
 Every secret is optional. An unset repository secret forwards as an empty
 string, and the reusable workflow falls back (`GH_PAT` → `github.token`) or
-skips the step that would have used it — so a repository that never publishes
-does not need `NPM_TOKEN`.
+skips the step that would have used it.
 
 ### 2. Grant at least the permissions the called workflow declares
 
@@ -51,8 +49,7 @@ Ask for less — even by leaving a scope out — and the run dies at startup.
 
 Grant them per job. A job-level `permissions:` block replaces the
 workflow-level one rather than merging with it, so the pattern is a
-restrictive workflow-level floor plus a per-job minimum — that way a summary
-or guard job never holds the write token the release call needed:
+restrictive workflow-level floor plus a per-job minimum.
 
 ```yaml
 permissions:
@@ -79,13 +76,14 @@ file does not exist. Callers outside this repository always use
 | Reusable workflow | Secrets | Consumed by | Permissions a caller must grant |
 | --- | --- | --- | --- |
 | `call-detect-release-state.yml` | — | read-only detection | `contents: read` |
-| `call-pipeline.yml` | — | takes no secrets | `contents: read` |
-| `call-apply-workspace-artifact.yml` | `GH_PAT`, `NPM_TOKEN` | `GH_PAT`: checkout/push, so a pushed commit can trigger follow-up workflows. `NPM_TOKEN`: exported as `NODE_AUTH_TOKEN` for `post_overlay_command` only | `contents: write`, `actions: read`, `id-token: write` |
+| `call-pipeline.yml` | — | predictable repository build/test/check/docs routines | `contents: read` |
+| `call-nx-targets.yml` | — | explicit ad-hoc `nx run-many` / `nx affected` target execution | `contents: read` |
+| `call-apply-workspace-artifact.yml` | `GH_PAT`, `NPM_TOKEN` | `GH_PAT`: checkout/push. `NPM_TOKEN`: exported as `NODE_AUTH_TOKEN` for `post_overlay_command` only | `contents: write`, `actions: read`, `id-token: write` |
 | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` | the `dry_run: false` path only — version PR, release tags, `changeset publish` | `contents: write`, `actions: write`, `id-token: write`, `pull-requests: write` |
 
-`call-release-plan.yml` nests the other three. It forwards `GH_PAT`/`NPM_TOKEN`
-to `call-apply-workspace-artifact.yml` by name too, so a caller's grant is
-exactly what the innermost workflow can read.
+`call-release-plan.yml` nests the other release workflows. It forwards
+`GH_PAT`/`NPM_TOKEN` to `call-apply-workspace-artifact.yml` by name too, so a
+caller's grant is exactly what the innermost workflow can read.
 
 ## What each template forwards
 
@@ -93,26 +91,50 @@ exactly what the innermost workflow can read.
 | --- | --- | --- |
 | `dispatch-release-plan.yml` | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` |
 | `push-release.yml` | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` |
-| `dispatch-workspace-update.yml` | `call-pipeline.yml`, `call-apply-workspace-artifact.yml` | `GH_PAT` (no `post_overlay_command`, so nothing reaches npm) |
+| `dispatch-workspace-update.yml` | `call-pipeline.yml`, `call-apply-workspace-artifact.yml` | `GH_PAT` |
 | `pr-checks.yml` | `call-detect-release-state.yml`, `call-pipeline.yml` | — |
 | `push-main.yml` | `call-pipeline.yml` | — |
 | `dispatch-pipeline.yml` | `call-pipeline.yml` | — |
+| `dispatch-nx-targets.yml` | `call-nx-targets.yml` | — |
 | `dispatch-smoke-matrix.yml` | `call-pipeline.yml` | — |
 | `dispatch-release-state.yml` | `call-detect-release-state.yml` | — |
+
+## Pipeline policy vs. Nx utility
+
+`call-pipeline.yml` is the predictable PR/release path. Its public routine
+controls are semantic modes:
+
+- `build_mode`, `test_mode`, `docs_mode`: `skip | report | abort_on_error`;
+- `check_mode`: `fix | check | skip`;
+- `api_report_mode`: `update | check | skip`;
+- `lockfile_mode`: `frozen | reconcile`.
+
+It does **not** expose arbitrary Nx targets, affected-mode switches, cache-reset
+buttons, `nx fix-ci`, or a pnpm-cache toggle. Nx Cloud is repository policy via
+`vars.DISABLE_NX_CLOUD`, not a per-run pipeline input.
+
+For an explicit ad-hoc Nx request, use `call-nx-targets.yml` or the synced
+**Dispatch Nx Targets** template. Its contract is intentionally small:
+
+```yaml
+scope: all | affected
+targets: "lint test build"
+mode: report | abort_on_error
+```
+
+Nx `affected` is an execution optimization only. It does not imply Changesets
+intent, release selection, or publication eligibility.
 
 ## Chromatic lives outside the reusable pipeline
 
 `call-pipeline.yml` declares no secrets, and does not run Chromatic.
 
-It used to. The problem was structural rather than cosmetic:
 `workflow_call.secrets` has no dynamic form, so a reusable workflow can only
 receive secrets under names it declares literally. Running Chromatic there
-therefore meant this shared repository listing every consumer's project token
-by name — and a new Storybook project in an unrelated repository became an edit
-and a `v1` re-tag here. That is the dependency pointing the wrong way.
+would mean this shared repository listing every consumer's project token by
+name. A composite action has no such contract: the caller sets `env:` in its
+own workflow with whatever names it likes.
 
-A composite action has no such contract. The caller sets `env:` in its own
-workflow, with whatever names it likes, so
 [`run-chromatic`](../.github/actions/run-chromatic/action.yml) owns the
 orchestration while the consumer owns the credentials:
 
@@ -136,8 +158,6 @@ on:
 permissions:
     contents: read
 
-# Job-level env, so every token your projects read is in scope for the step.
-# These names are yours — snailicid3-actions never sees them.
 env:
     HUSKY: 0
     CHROMATIC_PROJECT_TOKEN_GBT_SCOPE: ${{ secrets.CHROMATIC_PROJECT_TOKEN_GBT_SCOPE }}
@@ -166,29 +186,16 @@ jobs:
 
 Each project's `chromatic` target names the variable it reads and carries its
 own flags, so one invocation covers projects with different tokens, and
-projects without the target are skipped by Nx:
-
-```json
-{
-    "scripts": {
-        "chromatic": "chromatic --project-token=$CHROMATIC_PROJECT_TOKEN_GBT_SCOPE --exit-once-uploaded"
-    }
-}
-```
+projects without the target are skipped by Nx.
 
 ## Changing the contract
 
 The reusable workflow and every caller that invokes it move together:
 
-1. Change the secret declaration in `.github/workflows/call-*.yml`.
+1. Change the reusable workflow in `.github/workflows/call-*.yml`.
 2. Update every template here that calls it.
-3. `pnpm check:callers` — catches a template left behind.
-4. `bin/sync-callers.sh <consumer> ...` so consumers stop drifting, then
-   `bin/sync-callers.sh --check <consumer>` to confirm. `--check` also fails on
-   a consumer file that still carries the generated header but no longer has a
-   template — deleting or renaming a template otherwise leaves an obsolete
-   caller holding the old secret contract forever.
-5. After moving the `v1` tag, dispatch **Smoke Cross-Repo (v1)**. It calls the
-   published workflows through a remote ref the way a consumer does, which is
-   the only check that exercises the boundary a same-repository self-test
-   cannot reach.
+3. `pnpm check:callers` — catches secret/permission/path contract drift.
+4. `bin/sync-callers.sh <consumer> ...`, then
+   `bin/sync-callers.sh --check <consumer>` to confirm generated callers.
+5. Move the `v1` tag only after the new main contract is known-good, then
+   dispatch **Smoke Cross-Repo (v1)**.

@@ -33,13 +33,7 @@ name: z Call Release Plan
 # Secrets contract:
 #   Both secrets below are optional and only consumed on the dry_run=false
 #   path. Callers forward them by name — see templates/README.md. Nothing in
-#   this workflow relies on `secrets: inherit`, so what a caller grants is
-#   exactly what the nested workflows can read.
-#
-#     GH_PAT     checkout/push token for the version PR and release tags;
-#                falls back to github.token when empty.
-#     NPM_TOKEN  npm automation token for `changeset publish`; unused unless
-#                a publish candidate is actually released.
+#   this workflow relies on `secrets: inherit`.
 # ─────────────────────────────────────────────────────────────
 
 on:
@@ -101,12 +95,6 @@ on:
                 default: '24'
                 type: string
 
-            pnpm_cache:
-                description: Control pnpm cache usage in the validation pipeline.
-                required: false
-                default: true
-                type: boolean
-
         outputs:
             checked_ref:
                 description: Resolved commit SHA inspected by release-state detection.
@@ -158,8 +146,6 @@ jobs:
             release_phase: ${{ steps.phase.outputs.release_phase }}
 
         steps:
-            # A public input that silently falls through to frozen would hide a
-            # typo in a caller until someone wondered why repair never ran.
             - name: Validate lockfile mode
               shell: bash
               run: |
@@ -335,7 +321,6 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-
                   echo "Dry run: would create/update a Changesets version PR."
                   echo "Dry run: pending changeset count = ${{ needs.detect.outputs.changeset_count }}"
                   echo "Dry run: target branch would be ${{ steps.release_branch.outputs.branch }}."
@@ -352,14 +337,14 @@ jobs:
               uses: actions/setup-node@v7
               with:
                   node-version: ${{ inputs.node_version }}
-                  cache: ${{ inputs.pnpm_cache && 'pnpm' || '' }}
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
 
             - name: Install dependencies
               if: ${{ inputs.dry_run == false }}
               shell: bash
               run: |
                   set -euo pipefail
-
                   if [[ "${{ inputs.lockfile_mode }}" == "reconcile" ]]; then
                     pnpm install --no-frozen-lockfile
                   else
@@ -376,7 +361,6 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-
                   git add -A
 
                   if git diff --cached --quiet; then
@@ -400,7 +384,6 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-
                   git config user.name "github-actions[bot]"
                   git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
                   git config commit.gpgsign false
@@ -421,10 +404,6 @@ jobs:
                   GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
               run: |
                   set -euo pipefail
-
-                  # A secret pasted with a trailing newline makes gh fail with
-                  # "invalid header field value for Authorization" — strip all
-                  # whitespace from the token defensively.
                   GH_TOKEN="${GH_TOKEN//[$' \t\r\n']/}"
                   export GH_TOKEN
 
@@ -437,7 +416,6 @@ jobs:
                   release_branch="${{ steps.release_branch.outputs.branch }}"
 
                   pr="$(gh pr list --head "$release_branch" --base main --state open --json number -q '.[0].number' 2>/dev/null || true)"
-
                   if [[ -z "$pr" ]]; then
                     gh pr create --head "$release_branch" --base main --title "$title" --body "$body"
                   else
@@ -463,21 +441,18 @@ jobs:
         needs: [detect, plan, guard_real_release]
         if: ${{ always() && inputs.run_pipeline == true && needs.detect.outputs.should_publish == 'true' && (inputs.dry_run == true || needs.guard_real_release.result == 'success') }}
         uses: ./.github/workflows/call-pipeline.yml
-        # No secrets: call-pipeline.yml declares none.
         with:
             mode: abort_on_error
             check_mode: check
             lockfile_mode: ${{ inputs.lockfile_mode }}
+            build_mode: abort_on_error
+            test_mode: abort_on_error
+            docs_mode: abort_on_error
+            api_report_mode: check
             require_clean_repo: true
-            run_build: true
-            run_test: true
-            run_docs_build: true
-            api_report_mode: 'check'
             node_version: ${{ inputs.node_version }}
-            pnpm_cache: ${{ inputs.pnpm_cache }}
             upload_workspace_artifact: ${{ inputs.upload_workspace_artifact }}
             artifact_name_prefix: release-candidate
-            disable_nx_cloud: 'vars'
 
     pending_release_publish_plan:
         name: pending release publish plan
@@ -490,7 +465,6 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-
                   {
                     echo "## 🚀 Publish plan"
                     echo ""
@@ -499,7 +473,6 @@ jobs:
                     echo "- pipeline result: ${{ needs.pending_release_pipeline.result }}"
                     echo "- workspace artifact: ${{ needs.pending_release_pipeline.outputs.workspace_artifact_name }}"
                     echo ""
-
                     if [ "${{ inputs.dry_run }}" = "true" ]; then
                       echo "Dry run: would publish the listed candidates after validation."
                     fi
@@ -510,10 +483,6 @@ jobs:
         needs: [detect, plan, guard_real_release, pending_release_pipeline]
         if: ${{ always() && inputs.dry_run == false && needs.guard_real_release.result == 'success' && needs.detect.outputs.should_publish == 'true' && needs.pending_release_pipeline.result == 'success' && needs.pending_release_pipeline.outputs.artifact_uploaded == 'true' }}
         uses: ./.github/workflows/call-apply-workspace-artifact.yml
-        # Same-repository nested call. Forward the declared secrets by name
-        # rather than inheriting: `secrets: inherit` hands the *original*
-        # caller repository's whole secret set to a workflow that documents
-        # two optional secrets, which makes the boundary untestable.
         secrets:
             GH_PAT: ${{ secrets.GH_PAT }}
             NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -524,7 +493,6 @@ jobs:
             install_dependencies: true
             lockfile_mode: ${{ inputs.lockfile_mode }}
             node_version: ${{ inputs.node_version }}
-            pnpm_cache: ${{ inputs.pnpm_cache }}
             post_overlay_command: |
                 set -euo pipefail
 
@@ -539,11 +507,6 @@ jobs:
                 fi
 
                 for tag_name in $publish_candidates; do
-                  # Changesets creates tags locally during publish but may also push them.
-                  # If the tag is already on origin, skip. If it exists locally but not on
-                  # origin, push it with explicit src:dst. If it is absent locally (Changesets
-                  # pushed it already or tag creation failed), warn and continue so the
-                  # GitHub Release step still runs.
                   if git ls-remote --exit-code --tags origin "refs/tags/${tag_name}" >/dev/null 2>&1; then
                     echo "Tag already exists on origin: $tag_name"
                   elif git rev-parse --verify "refs/tags/${tag_name}" >/dev/null 2>&1; then
