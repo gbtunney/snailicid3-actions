@@ -148,8 +148,8 @@ dist
 *.d.cts.map
 *.map
 
-# Docs
-docs
+# Docs - usually ignore 
+# docs
 
 # Un-ignore the @snailicid3/types source package
 !packages/types/
