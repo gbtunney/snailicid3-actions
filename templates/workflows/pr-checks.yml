@@ -13,7 +13,8 @@ on:
 
 concurrency:
     group: pr-${{ github.event.pull_request.number || github.ref_name }}
-    cancel-in-progress: true
+    # A new PR run may supersede stale validation. A rerun increments run_attempt and queues instead of cancelling the healthy run already in this PR group.
+    cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == '1' }}
 
 permissions:
     contents: read
