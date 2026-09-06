@@ -14,7 +14,7 @@
     },
     "scripts": {
         "check:callers": "tsx bin/check-caller-contract.ts",
-        "test:callers": "tsx bin/check-caller-contract.test.ts",
+        "test:callers": "tsx bin/check-caller-contract.test.ts && tsx bin/check-pr-concurrency.test.ts",
         "typecheck": "tsc --noEmit"
     }
 }
