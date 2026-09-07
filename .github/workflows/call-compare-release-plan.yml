@@ -112,10 +112,15 @@ jobs:
                   ref: ${{ inputs.adapter_ref }}
                   path: adapter
 
+            # Both checkouts land in subdirectories, so the workspace root
+            # holds no package.json and the action has no `packageManager` to
+            # read a version from. Point it at the adapter's own manifest,
+            # which is the one whose pnpm actually runs here.
             - name: Setup pnpm
               uses: pnpm/action-setup@v6
               with:
                   run_install: false
+                  package_json_file: adapter/package.json
 
             - name: Setup Node
               uses: actions/setup-node@v7
@@ -152,7 +157,7 @@ jobs:
                   pnpm exec tsx bin/compare-release-plan.ts \
                     --repo-root "$GITHUB_WORKSPACE/observed" \
                     --detector "${{ steps.detector.outputs.path }}" \
-                    --plan-out "$RUNNER_TEMP/release-plan.json" \
+                    --plan-out "$GITHUB_WORKSPACE/release-plan.json" \
                     --summary "$GITHUB_STEP_SUMMARY" \
                     --outputs "$GITHUB_OUTPUT"
 
@@ -169,10 +174,15 @@ jobs:
                     echo "the surrounding workflows act on."
                   } >> "$GITHUB_STEP_SUMMARY"
 
+            # The plan is written into the workspace rather than the temp
+            # directory because `hashFiles` only sees paths under
+            # GITHUB_WORKSPACE; from the temp directory it returns empty and
+            # silently skips the upload. `if-no-files-found: ignore` covers the
+            # case where the comparison step failed before writing anything.
             - name: Upload the observed release plan
-              if: ${{ always() && hashFiles(format('{0}/release-plan.json', runner.temp)) != '' }}
+              if: ${{ always() }}
               uses: actions/upload-artifact@v7
               with:
                   name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
-                  path: ${{ runner.temp }}/release-plan.json
+                  path: release-plan.json
                   if-no-files-found: ignore
