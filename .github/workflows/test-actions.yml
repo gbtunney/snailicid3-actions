@@ -366,48 +366,6 @@ jobs:
             - name: Prove the adapter rejects unsupported schemaVersions and reproduces #232/#233/#234
               run: pnpm test:adapter
 
-    compare_release_plan:
-        name: compare release plan
-        uses: ./.github/workflows/call-compare-release-plan.yml
-        with:
-            adapter_ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-    assert_comparison:
-        name: assert dual run
-        needs: compare_release_plan
-        runs-on: ubuntu-latest
-        steps:
-            # The fixture repository holds one private package and no
-            # changesets, so the detector and the canonical plan should agree
-            # on every field that is expected to agree. A difference here is
-            # either adapter drift or a change to the fixture's own shape, and
-            # both are worth stopping on in this repository's own self-test —
-            # the comparison stays non-enforcing for consumers.
-            - name: Dual run must agree on the fixture repository
-              shell: bash
-              run: |
-                  set -euo pipefail
-
-                  schema_version="${{ needs.compare_release_plan.outputs.schema_version }}"
-                  divergent_count="${{ needs.compare_release_plan.outputs.divergent_field_count }}"
-                  divergent_fields="${{ needs.compare_release_plan.outputs.divergent_fields }}"
-
-                  echo "schema_version=$schema_version"
-                  echo "divergent_field_count=$divergent_count"
-                  echo "divergent_fields=$divergent_fields"
-
-                  if [[ "$schema_version" != "1" ]]; then
-                    echo "::error::Expected the adapter to accept release-plan schemaVersion 1 (got '$schema_version')."
-                    exit 1
-                  fi
-
-                  if [[ "$divergent_count" != "0" ]]; then
-                    echo "::error::Detector and canonical plan disagreed on: $divergent_fields."
-                    exit 1
-                  fi
-
-                  echo "Detector and canonical plan agree on every field expected to agree."
-
     release_plan:
         name: release plan
         permissions:
@@ -426,74 +384,39 @@ jobs:
             run_pipeline: false
             adapter_ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-    # The rollback switch is only a rollback path if it is exercised. This runs
-    # the same workflow with phase_source: detector, which must reach the same
-    # phase through the pre-cutover derivation.
-    release_plan_rollback:
-        name: release plan (detector rollback)
-        permissions:
-            contents: write
-            actions: write
-            id-token: write
-            pull-requests: write
-        uses: ./.github/workflows/call-release-plan.yml
-        secrets:
-            GH_PAT: ${{ secrets.GH_PAT }}
-            NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        with:
-            dry_run: true
-            run_pipeline: false
-            phase_source: detector
-
     assert_phase_cutover:
-        name: assert phase cutover
-        needs: [release_plan, release_plan_rollback]
+        name: assert phase selection
+        needs: release_plan
         runs-on: ubuntu-latest
         steps:
-            - name: Canonical selection must be active, agree with the detector, and authorize nothing
+            - name: Canonical selection must be active and authorize nothing
               shell: bash
               env:
-                  CANONICAL_PHASE: ${{ needs.release_plan.outputs.release_phase }}
-                  CANONICAL_SOURCE: ${{ needs.release_plan.outputs.phase_source }}
-                  CANONICAL_DETECTOR_PHASE: ${{ needs.release_plan.outputs.detector_release_phase }}
-                  CANONICAL_SHOULD_PUBLISH: ${{ needs.release_plan.outputs.should_publish }}
-                  CANONICAL_INVENTORY_COUNT: ${{ needs.release_plan.outputs.release_inventory_count }}
-                  ROLLBACK_PHASE: ${{ needs.release_plan_rollback.outputs.release_phase }}
-                  ROLLBACK_SOURCE: ${{ needs.release_plan_rollback.outputs.phase_source }}
+                  PHASE: ${{ needs.release_plan.outputs.release_phase }}
+                  SHOULD_PUBLISH: ${{ needs.release_plan.outputs.should_publish }}
+                  SHOULD_SKIP: ${{ needs.release_plan.outputs.should_skip }}
+                  INVENTORY_COUNT: ${{ needs.release_plan.outputs.release_inventory_count }}
               run: |
                   set -euo pipefail
 
-                  echo "canonical: source=$CANONICAL_SOURCE phase=$CANONICAL_PHASE detector_phase=$CANONICAL_DETECTOR_PHASE"
-                  echo "rollback:  source=$ROLLBACK_SOURCE phase=$ROLLBACK_PHASE"
+                  echo "phase=$PHASE should_publish=$SHOULD_PUBLISH should_skip=$SHOULD_SKIP inventory=$INVENTORY_COUNT"
 
-                  # The cutover actually happened: the default run selects from the canonical plan.
-                  if [[ "$CANONICAL_SOURCE" != "canonical" ]]; then
-                    echo "::error::Expected the default phase source to be canonical (got '$CANONICAL_SOURCE')."
+                  # The fixture workspace holds one private package and no
+                  # changesets, so the canonical plan must reach `main`.
+                  if [[ "$PHASE" != "main" ]]; then
+                    echo "::error::Expected the fixture workspace to select phase 'main' (got '$PHASE')."
                     exit 1
                   fi
 
-                  # The rollback switch actually reaches the detector derivation.
-                  if [[ "$ROLLBACK_SOURCE" != "detector" ]]; then
-                    echo "::error::phase_source: detector did not select the detector derivation (got '$ROLLBACK_SOURCE')."
-                    exit 1
-                  fi
-
-                  # Switching sources must not move the phase on this fixture.
-                  if [[ "$CANONICAL_PHASE" != "$ROLLBACK_PHASE" ]]; then
-                    echo "::error::Canonical selected '$CANONICAL_PHASE' but the rollback path selected '$ROLLBACK_PHASE'."
-                    exit 1
-                  fi
-
-                  if [[ "$CANONICAL_PHASE" != "$CANONICAL_DETECTOR_PHASE" ]]; then
-                    echo "::error::Canonical phase '$CANONICAL_PHASE' disagrees with the reported detector phase '$CANONICAL_DETECTOR_PHASE'."
+                  if [[ "$SHOULD_SKIP" != "true" ]]; then
+                    echo "::error::Phase 'main' must report should_skip=true (got '$SHOULD_SKIP')."
                     exit 1
                   fi
 
                   # A read-only observation authorizes nothing, whatever phase it selected.
-                  if [[ "$CANONICAL_SHOULD_PUBLISH" != "false" ]]; then
-                    echo "::error::A read-only observation reported should_publish='$CANONICAL_SHOULD_PUBLISH'; it must never authorize publication."
+                  if [[ "$SHOULD_PUBLISH" != "false" ]]; then
+                    echo "::error::A read-only observation reported should_publish='$SHOULD_PUBLISH'; it must never authorize publication."
                     exit 1
                   fi
 
-                  echo "Cutover holds: canonical is active, the rollback switch works, both reach '$CANONICAL_PHASE',"
-                  echo "and the plan authorized nothing (release_inventory_count=$CANONICAL_INVENTORY_COUNT)."
+                  echo "Canonical selection is active, reached '$PHASE', and authorized nothing."

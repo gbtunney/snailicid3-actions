@@ -76,16 +76,13 @@ file does not exist. Callers outside this repository always use
 | Reusable workflow | Secrets | Consumed by | Permissions a caller must grant |
 | --- | --- | --- | --- |
 | `call-detect-release-state.yml` | — | read-only detection | `contents: read` |
-| `call-compare-release-plan.yml` | — | non-enforcing dual run of the detector against the canonical `@snailicid3/workspace` release plan | `contents: read` |
 | `call-pipeline.yml` | — | predictable repository build/test/check/docs routines | `contents: read` |
 | `call-nx-targets.yml` | — | explicit ad-hoc `nx run-many` / `nx affected` target execution | `contents: read` |
 | `call-apply-workspace-artifact.yml` | `GH_PAT`, `NPM_TOKEN` | `GH_PAT`: checkout/push. `NPM_TOKEN`: exported as `NODE_AUTH_TOKEN` for `post_overlay_command` only | `contents: write`, `actions: read`, `id-token: write` |
 | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` | the `dry_run: false` path only — version PR, release tags, `changeset publish` | `contents: write`, `actions: write`, `id-token: write`, `pull-requests: write` |
 
 `call-release-plan.yml` selects its release phase from the canonical
-`@snailicid3/workspace` release plan. Set its `phase_source` input to `detector`
-to roll back to the previous `call-detect-release-state.yml` derivation; the
-default is `canonical`. Consumers pinning `@v1` should also pass
+`@snailicid3/workspace` release plan. Consumers pinning `@v1` should also pass
 `adapter_ref: v1` so the adapter comes from the same tag they call.
 
 `call-release-plan.yml` nests the other release workflows. It forwards
