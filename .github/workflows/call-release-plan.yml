@@ -781,7 +781,14 @@ jobs:
     main:
         name: no release action
         needs: [detect, plan]
-        if: ${{ needs.plan.outputs.release_phase == 'main' }}
+        # always() is load-bearing, not decorative. `plan` depends on
+        # canonical_plan, which is skipped whenever phase_source is detector,
+        # and a skipped dependency propagates through the needs chain to any
+        # dependent job that does not opt out. Without always() this job is
+        # skipped on the rollback path even though the phase is main — which is
+        # exactly what happened on the first run of this change. Every other
+        # phase-gated job in this workflow already carries the same guard.
+        if: ${{ always() && needs.plan.outputs.release_phase == 'main' }}
         runs-on: ubuntu-latest
 
         steps:
@@ -804,6 +811,7 @@ jobs:
                   changeset_result="${{ needs.pending_changeset.result }}"
                   publish_result="${{ needs.pending_release_publish.result }}"
                   main_result="${{ needs.main.result }}"
+                  inconsistent=false
 
                   {
                     echo "## 🎯 Release outcome"
@@ -835,3 +843,21 @@ jobs:
                       fi
                     fi
                   } >> "$GITHUB_STEP_SUMMARY"
+
+                  # The no-action job has no dry-run or guard preconditions, so
+                  # selecting `main` and not running it means the selected phase
+                  # and the path that actually ran disagree. That is a workflow
+                  # defect rather than a release-state result, and reporting it
+                  # as a summary line let a real regression through a green run.
+                  if [ "$phase" = "main" ] \
+                    && [ "$main_result" != "success" ] \
+                    && [ "$main_result" != "cancelled" ]; then
+                    inconsistent=true
+                    echo "::error::Phase 'main' was selected but the no-release-action job did not run (result: $main_result)."
+                  fi
+
+                  if [ "$inconsistent" = "true" ]; then
+                    echo "" >> "$GITHUB_STEP_SUMMARY"
+                    echo "❌ **Workflow defect:** the selected phase and the path that ran disagree." >> "$GITHUB_STEP_SUMMARY"
+                    exit 1
+                  fi
