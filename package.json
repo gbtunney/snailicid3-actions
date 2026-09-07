@@ -17,7 +17,7 @@
     },
     "scripts": {
         "check:callers": "tsx bin/check-caller-contract.ts",
-        "compare:release-plan": "tsx bin/compare-release-plan.ts",
+        "release:plan": "tsx bin/release-plan.ts",
         "test:adapter": "tsx bin/workspace-release-plan.test.ts",
         "test:callers": "tsx bin/check-caller-contract.test.ts && tsx bin/check-pr-concurrency.test.ts",
         "typecheck": "tsc --noEmit"

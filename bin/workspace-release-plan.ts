@@ -1,19 +1,22 @@
 /**
- * Adapter between the canonical `@snailicid3/workspace` release-plan contract and this repository's legacy
- * release-state outputs.
+ * Adapter between the canonical `@snailicid3/workspace` release-plan contract and this repository's release workflows.
  *
- * Actions used to re-derive release truth in YAML and Bash. Workspace now owns that derivation and publishes it as a
+ * Actions used to re-derive release truth in YAML and Bash. Workspace owns that derivation and publishes it as a
  * versioned JSON document, so the job here is deliberately small: invoke the canonical producer, refuse a document
- * whose `schemaVersion` this adapter does not support, and *map* the result onto the output names existing callers
+ * whose `schemaVersion` this adapter does not support, and map the result onto the output names existing callers
  * already consume. Nothing in this module recomputes registry state, release intent, per-package status, or publish
  * eligibility — every one of those is read from the plan.
  *
- * `selectReleasePhase` is now the active source of release phase selection in `call-release-plan.yml`.
- * `call-detect-release-state.yml` is preserved as the deliberate rollback path, reachable by setting that workflow's
- * `phase_source` input to `detector`.
+ * This is the only source of release phase selection. The detector that preceded it (`call-detect-release-state.yml`)
+ * survives for exactly one reason: it owns the pending-changeset filenames that `schemaVersion: 1` does not carry, and
+ * `call-release-plan.yml` still needs them to name a version branch. It no longer decides anything.
+ *
+ * What `schemaVersion: 1` does not carry, and therefore never appears here: `changeset_count`, `changeset_slugs` and
+ * `primary_changeset_slug` (Changesets filenames), and the split between `new_package_count` and `new_version_count`
+ * (the plan records whether an exact `name@version` exists, not whether the package name itself is new). Those stay
+ * detector-derived and are reported as such rather than approximated from the plan.
  *
  * @see file://./../.github/workflows/call-release-plan.yml
- * @see file://./../.github/workflows/call-compare-release-plan.yml
  */
 
 import { readFileSync } from 'node:fs'
@@ -66,159 +69,30 @@ export type ReleasePlanDocumentResult =
     | { ok: true; plan: ReleasePlan }
 
 /**
- * The legacy `call-detect-release-state.yml` output surface, as a mapped projection of the canonical plan.
+ * The release-state values `call-release-plan.yml` surfaces, mapped from the canonical plan.
  *
- * A `null` field is one `schemaVersion: 1` does not carry. It is left null rather than filled with a plausible value,
- * because a guessed number is indistinguishable from an observed one once it reaches a caller.
+ * Every field here is read or counted from the plan and is surfaced as a workflow output. Fields that were only ever
+ * needed to compare this mapping against the detector are gone: they had no consumer once the canonical plan became
+ * the active source, and an output nothing reads is a claim nothing checks.
  */
-export interface LegacyReleaseStateOutputs {
-    already_published_count: number
-    changeset_count: null | number
-    changeset_slugs: null | string
-    has_pending_changesets: boolean
-    has_publish_candidates: boolean
-    invalid_package_count: number
-    lookup_failed_count: number
-    new_package_count: null | number
-    new_version_count: null | number
-    package_count: number
+export interface ReleaseStateOutputs {
     /**
-     * Public packages whose exact version the registry reports as absent.
+     * Public packages whose exact version the registry reports as absent, as `name@version`.
      *
-     * This is inventory, not authorization. It is the quantity the legacy detector called `publish_candidate_count`,
-     * carried under a name that cannot be mistaken for permission to publish.
+     * This is inventory, not authorization. It is the quantity the retired detector called `publish_candidates`,
+     * carried under a name that cannot be mistaken for permission to publish, and surfaced under the original name for
+     * callers that still read it.
      */
     pending_inventory: string
     pending_inventory_count: number
-    primary_changeset_slug: null | string
-    private_package_count: number
-    public_package_count: number
-    publish_candidate_count: number
-    publish_candidates: string
+    /**
+     * True only when the plan actually offers a publish operation.
+     *
+     * False for every read-only observation, whatever the registry is missing. Callers that want "there is something
+     * to release" want `pending_inventory_count`.
+     */
     should_publish: boolean
-    should_skip: boolean
     should_version: boolean
-}
-
-/** How one output name is expected to behave when the two derivations are compared. */
-export type ReleaseStateFieldPolicy = 'intentional' | 'parity' | 'unmapped'
-
-/** One field's declared expectation, and why it holds. */
-export interface ReleaseStateFieldRule {
-    policy: ReleaseStateFieldPolicy
-    reason: string
-}
-
-/**
- * The difference ledger: what each output is expected to do, recorded before any comparison runs.
- *
- * Writing the expectations down first is what makes a dual run reviewable. Without it, every difference looks equally
- * like a bug, and the one difference that matters — that an observation refuses to authorize publication from registry
- * absence — reads as noise beside twelve accounting rows.
- */
-export const RELEASE_STATE_FIELD_RULES: Record<
-    keyof LegacyReleaseStateOutputs,
-    ReleaseStateFieldRule
-> = {
-    already_published_count: {
-        policy: 'parity',
-        reason: 'Both count public packages whose exact version the registry reports as present.',
-    },
-    changeset_count: {
-        policy: 'unmapped',
-        reason: 'The plan records per-package release intent, not the pending changeset files it came from.',
-    },
-    changeset_slugs: {
-        policy: 'unmapped',
-        reason: 'Changeset filenames are a Changesets implementation detail the plan does not carry.',
-    },
-    has_pending_changesets: {
-        policy: 'parity',
-        reason: 'Pending intent is visible in the plan as a package whose intent source is changesets.',
-    },
-    has_publish_candidates: {
-        policy: 'intentional',
-        reason: 'Follows publish_candidate_count: an observation offers no publish operation, so it reports none.',
-    },
-    invalid_package_count: {
-        policy: 'intentional',
-        reason: 'A malformed name or version is rejected at the plan boundary, so no plan record can carry one and the mapped count is structurally zero.',
-    },
-    lookup_failed_count: {
-        policy: 'parity',
-        reason: 'Both count public packages whose registry lookup did not answer.',
-    },
-    new_package_count: {
-        policy: 'unmapped',
-        reason: 'The plan records whether an exact name@version exists, not whether the package name itself is new, so the legacy split cannot be reconstructed.',
-    },
-    new_version_count: {
-        policy: 'unmapped',
-        reason: 'Same as new_package_count: only the exact-version answer is recorded, and their sum is pending_inventory_count.',
-    },
-    package_count: {
-        policy: 'parity',
-        reason: 'Both count the repository’s packages; the plan uses the package manager’s workspace listing where the detector walks the filesystem, so a repository holding non-member manifests will differ here.',
-    },
-    pending_inventory: {
-        policy: 'parity',
-        reason: 'Compared against the legacy publish_candidates string: the same inventory, named so it cannot be read as authorization.',
-    },
-    pending_inventory_count: {
-        policy: 'parity',
-        reason: 'Compared against the legacy publish_candidate_count: the same inventory count, under a name that does not imply permission.',
-    },
-    primary_changeset_slug: {
-        policy: 'unmapped',
-        reason: 'Derived from changeset filenames, which the plan does not carry.',
-    },
-    private_package_count: {
-        policy: 'parity',
-        reason: 'Both count packages their manifest marks private.',
-    },
-    public_package_count: {
-        policy: 'parity',
-        reason: 'Both count packages their manifest does not mark private.',
-    },
-    publish_candidate_count: {
-        policy: 'intentional',
-        reason: 'The legacy detector treats registry absence as a publish candidate. The plan counts only packages that actually offer a publish operation, which an observation never does.',
-    },
-    publish_candidates: {
-        policy: 'intentional',
-        reason: 'Same as publish_candidate_count; the equivalent inventory is reported as pending_inventory.',
-    },
-    should_publish: {
-        policy: 'intentional',
-        reason: 'Follows publish_candidate_count, and additionally requires an execution that is not a read-only observation.',
-    },
-    should_skip: {
-        policy: 'intentional',
-        reason: 'Consequence of should_publish: with nothing to version and nothing authorized to publish, an observation of pending inventory reports skip where the detector reports a release.',
-    },
-    should_version: {
-        policy: 'parity',
-        reason: 'Both report that release intent is pending.',
-    },
-}
-
-/** One field's outcome in a dual run. */
-export interface ReleaseStateComparisonRow {
-    equal: boolean
-    field: keyof LegacyReleaseStateOutputs
-    legacy: string
-    mapped: string
-    policy: ReleaseStateFieldPolicy
-    reason: string
-}
-
-/** The whole dual run, split into what agreed, what was expected to differ, and what was not. */
-export interface ReleaseStateComparison {
-    /** Rows expected to agree that did not. These are the only rows a reviewer must act on. */
-    divergent: ReleaseStateComparisonRow[]
-    /** Rows that agreed, or that differed exactly where the ledger says they should. */
-    expected: ReleaseStateComparisonRow[]
-    rows: ReleaseStateComparisonRow[]
 }
 
 /**
@@ -242,153 +116,24 @@ export interface ReleasePhaseSelection {
     reason: string
 }
 
-/**
- * Select the release phase from the canonical plan's mapped outputs.
- *
- * Every input is a value the plan recorded; nothing here re-derives release eligibility. Order encodes precedence and
- * matches the rule the detector used, with one deliberate difference: the second branch tests *inventory*
- * (`pending_inventory_count`) rather than the detector's `publish_candidate_count`, because the canonical plan reports
- * a missing exact version as held inventory and offers no publish operation for it. Selecting the phase from
- * authorization instead would make `pending_release` unreachable and silently strand the manual release path.
- */
-export function selectReleasePhase(
-    mapped: LegacyReleaseStateOutputs,
-): ReleasePhaseSelection {
-    const publishAuthorized = mapped.should_publish
-
-    if (mapped.should_version) {
-        return {
-            phase: 'pending_changeset',
-            publishAuthorized,
-            reason: 'The plan records pending release intent for at least one package.',
-        }
-    }
-
-    if (mapped.pending_inventory_count > 0) {
-        return {
-            phase: 'pending_release',
-            publishAuthorized,
-            reason: `${mapped.pending_inventory_count} package version(s) are absent from the registry. That is inventory: publication still requires an explicitly selected operation.`,
-        }
-    }
-
-    return {
-        phase: 'main',
-        publishAuthorized,
-        reason: 'The plan records no pending release intent and no absent package versions.',
-    }
-}
-
-/**
- * Reproduce the phase the detector's own outputs imply.
- *
- * Display and rollback-review only. The rollback path itself keeps its original derivation in
- * `call-release-plan.yml`, so this is never the rule that selects a phase — it exists so a dual run can show the two
- * results side by side without a reader having to reconstruct the legacy one by hand.
- */
-export function deriveDetectorPhase(
-    legacy: LegacyReleaseStateRecord,
-): 'main' | 'pending_changeset' | 'pending_release' | 'unknown' {
-    if (legacy.should_version === undefined && legacy.should_publish === undefined) {
-        return 'unknown'
-    }
-    if (legacy.should_version === true) return 'pending_changeset'
-    if (legacy.should_publish === true) return 'pending_release'
-
-    return 'main'
-}
-
-/** Recorded legacy detector output, as read from a fixture or from a live detector job. */
-export type LegacyReleaseStateRecord = Partial<
-    Record<keyof LegacyReleaseStateOutputs, unknown>
->
-
-/**
- * Compare a mapped plan against legacy detector output, field by field, without deciding anything.
- *
- * The comparison is non-enforcing by construction: it returns rows. Whether a divergence should fail a job is a
- * caller's policy, and during this slice no caller makes it one.
- */
-export function compareReleaseState(
-    mapped: LegacyReleaseStateOutputs,
-    legacy: LegacyReleaseStateRecord,
-): ReleaseStateComparison {
-    const rows = (
-        Object.keys(RELEASE_STATE_FIELD_RULES) as Array<
-            keyof LegacyReleaseStateOutputs
-        >
-    ).map((field): ReleaseStateComparisonRow => {
-        const rule = RELEASE_STATE_FIELD_RULES[field]
-        const mappedValue = mapped[field]
-        const legacyValue = readLegacyField(legacy, field)
-
-        return {
-            equal: formatValue(mappedValue) === formatValue(legacyValue),
-            field,
-            legacy: formatValue(legacyValue),
-            mapped: formatValue(mappedValue),
-            policy: rule.policy,
-            reason: rule.reason,
-        }
-    })
-
-    return {
-        divergent: rows.filter((row) => row.policy === 'parity' && !row.equal),
-        expected: rows.filter((row) => row.policy !== 'parity' || row.equal),
-        rows,
-    }
-}
-
-/**
- * Map the canonical plan onto the legacy output names.
- *
- * Every value here is read or counted from the plan. The one place this function adds a name of its own is
- * `pending_inventory`, which exists precisely so the inventory the legacy detector called a publish candidate can be
- * compared without inheriting the word "candidate".
- */
-export function mapReleasePlanToLegacyOutputs(
-    plan: ReleasePlan,
-): LegacyReleaseStateOutputs {
-    const publicPackages = plan.packages.filter(
-        (packagePlan) => !packagePlan.private,
-    )
-    const pendingInventory = publicPackages.filter(
-        (packagePlan) => packagePlan.registry.state === 'missing',
+/** Map the canonical plan onto the release-state values the workflow surfaces. */
+export function mapReleasePlanToOutputs(plan: ReleasePlan): ReleaseStateOutputs {
+    const pendingInventory = plan.packages.filter(
+        (packagePlan) =>
+            !packagePlan.private && packagePlan.registry.state === 'missing',
     )
     const publishable = plan.packages.filter((packagePlan) =>
         packagePlan.availableNextOperations.includes('publish'),
     )
-    const hasPublishCandidates =
-        plan.execution.operation !== 'observe' && publishable.length > 0
-    const shouldVersion = plan.packages.some(
-        (packagePlan) => packagePlan.intent.source !== 'none',
-    )
 
     return {
-        already_published_count: plan.summary.published,
-        changeset_count: null,
-        changeset_slugs: null,
-        has_pending_changesets: plan.packages.some(
-            (packagePlan) => packagePlan.intent.source === 'changesets',
-        ),
-        has_publish_candidates: hasPublishCandidates,
-        invalid_package_count: 0,
-        lookup_failed_count: plan.summary.unknown,
-        new_package_count: null,
-        new_version_count: null,
-        package_count: plan.summary.packages,
         pending_inventory: formatPackageList(pendingInventory),
         pending_inventory_count: pendingInventory.length,
-        primary_changeset_slug: null,
-        private_package_count: plan.summary.private,
-        public_package_count: publicPackages.length,
-        publish_candidate_count: hasPublishCandidates ? publishable.length : 0,
-        publish_candidates: hasPublishCandidates
-            ? formatPackageList(publishable)
-            : '',
-        should_publish: hasPublishCandidates,
-        should_skip: !shouldVersion && !hasPublishCandidates,
-        should_version: shouldVersion,
+        should_publish:
+            plan.execution.operation !== 'observe' && publishable.length > 0,
+        should_version: plan.packages.some(
+            (packagePlan) => packagePlan.intent.source !== 'none',
+        ),
     }
 }
 
@@ -469,7 +214,7 @@ export function readReleasePlanDocument(
     if (declared !== SUPPORTED_RELEASE_PLAN_SCHEMA_VERSION) {
         return {
             ok: false,
-            reason: `Unsupported release-plan schemaVersion ${formatValue(declared)}; this adapter supports ${SUPPORTED_RELEASE_PLAN_SCHEMA_VERSION} only.`,
+            reason: `Unsupported release-plan schemaVersion ${String(declared)}; this adapter supports ${SUPPORTED_RELEASE_PLAN_SCHEMA_VERSION} only.`,
         }
     }
 
@@ -481,87 +226,65 @@ export function readReleasePlanDocument(
     }
 }
 
-/**
- * Render the phase selection, with the detector's own result beside it.
- *
- * Kept separate from the field comparison so the phase — the thing that now drives the workflow — is not buried in a
- * twenty-row table.
- */
-export function renderPhaseSelectionMarkdown(
+/** Render the selected phase and the plan it came from, with the plan drawn by the Workspace renderer. */
+export function renderReleasePlanReportMarkdown(
+    plan: ReleasePlan,
     selection: ReleasePhaseSelection,
-    detectorPhase: string,
 ): string {
-    const agreement =
-        detectorPhase === 'unknown'
-            ? 'No detector outputs were supplied, so there is nothing to compare against.'
-            : detectorPhase === selection.phase
-              ? 'The canonical plan and the detector select the same phase.'
-              : `The canonical plan selects \`${selection.phase}\` where the detector selects \`${detectorPhase}\`.`
-
     return [
-        '## Release phase',
+        '# Release phase',
         '',
-        `- **Canonical phase:** \`${selection.phase}\``,
-        `- **Detector phase:** \`${detectorPhase}\``,
+        `- **Phase:** \`${selection.phase}\``,
         `- **Publish authorized by the plan:** \`${selection.publishAuthorized}\``,
         '',
         selection.reason,
         '',
-        agreement,
-        '',
         'Reaching `pending_release` is not permission to publish. It reports that the registry is missing package',
         'versions this workspace holds; publication still requires an explicit non-dry-run invocation that clears the',
         'real-release guard.',
-    ].join('\n')
-}
-
-/** Render the dual run as Markdown, with the canonical plan drawn by the Workspace renderer. */
-export function renderComparisonMarkdown(
-    plan: ReleasePlan,
-    comparison: ReleaseStateComparison,
-): string {
-    // An unmapped field has nothing to agree or disagree about, so it is labelled rather than scored.
-    const result = (row: ReleaseStateComparisonRow): string =>
-        row.policy === 'unmapped' ? 'n/a' : row.equal ? 'same' : 'differs'
-
-    const rowLine = (row: ReleaseStateComparisonRow): string =>
-        `| \`${row.field}\` | \`${row.mapped}\` | \`${row.legacy}\` | ${result(row)} | ${row.policy} |`
-
-    return [
-        '# Release-state dual run (non-enforcing)',
-        '',
-        comparison.divergent.length === 0
-            ? 'Every field expected to agree agreed. Remaining differences are the declared, intentional ones.'
-            : `${comparison.divergent.length} field(s) expected to agree did not. This run reports them; it does not fail on them.`,
-        '',
-        '## Mapped outputs',
-        '',
-        '| Field | Canonical plan | Legacy detector | Result | Policy |',
-        '|---|---|---|---|---|',
-        ...comparison.rows.map(rowLine),
-        '',
-        '## Declared differences',
-        '',
-        ...comparison.rows
-            .filter((row) => row.policy !== 'parity')
-            .map((row) => `- \`${row.field}\` (${row.policy}): ${row.reason}`),
-        ...(comparison.divergent.length === 0
-            ? []
-            : [
-                  '',
-                  '## Unexpected differences',
-                  '',
-                  ...comparison.divergent.map(
-                      (row) =>
-                          `- \`${row.field}\`: plan \`${row.mapped}\` vs detector \`${row.legacy}\`. ${row.reason}`,
-                  ),
-              ]),
         '',
         renderReleasePlanMarkdown(plan),
     ].join('\n')
 }
 
-/** `name@version`, space-delimited and name-ordered, matching the legacy string shape. */
+/**
+ * Select the release phase from the canonical plan's mapped outputs.
+ *
+ * Every input is a value the plan recorded; nothing here re-derives release eligibility. Order encodes precedence and
+ * matches the rule the retired detector used, with one deliberate difference: the second branch tests *inventory*
+ * (`pending_inventory_count`) rather than the detector's `publish_candidate_count`, because the canonical plan reports
+ * a missing exact version as held inventory and offers no publish operation for it. Selecting the phase from
+ * authorization instead would make `pending_release` unreachable and silently strand the manual release path.
+ */
+export function selectReleasePhase(
+    mapped: ReleaseStateOutputs,
+): ReleasePhaseSelection {
+    const publishAuthorized = mapped.should_publish
+
+    if (mapped.should_version) {
+        return {
+            phase: 'pending_changeset',
+            publishAuthorized,
+            reason: 'The plan records pending release intent for at least one package.',
+        }
+    }
+
+    if (mapped.pending_inventory_count > 0) {
+        return {
+            phase: 'pending_release',
+            publishAuthorized,
+            reason: `${mapped.pending_inventory_count} package version(s) are absent from the registry. That is inventory: publication still requires an explicitly selected operation.`,
+        }
+    }
+
+    return {
+        phase: 'main',
+        publishAuthorized,
+        reason: 'The plan records no pending release intent and no absent package versions.',
+    }
+}
+
+/** `name@version`, space-delimited and name-ordered, matching the string shape callers already read. */
 function formatPackageList(
     packages: ReadonlyArray<ReleasePackagePlan>,
 ): string {
@@ -569,32 +292,6 @@ function formatPackageList(
         .map((packagePlan) => `${packagePlan.name}@${packagePlan.version}`)
         .sort()
         .join(' ')
-}
-
-/**
- * Render any recorded value as the string a workflow output would carry, so booleans and numbers compare alike.
- *
- * An unrecorded value and an empty one are rendered differently on purpose: "nothing was recorded" and "the list was
- * empty" are the difference between an unmapped field and a real answer of zero packages.
- */
-function formatValue(value: unknown): string {
-    if (value === null || value === undefined) return '(unmapped)'
-    if (value === '') return '(empty)'
-
-    return String(value)
-}
-
-/** Read one legacy field, treating an absent key as unrecorded rather than as an empty value. */
-function readLegacyField(
-    legacy: LegacyReleaseStateRecord,
-    field: keyof LegacyReleaseStateOutputs,
-): unknown {
-    if (field === 'pending_inventory') return legacy.publish_candidates
-    if (field === 'pending_inventory_count') {
-        return legacy.publish_candidate_count
-    }
-
-    return legacy[field]
 }
 
 /** Pull `schemaVersion` off an unparsed document so a rejection can name what it saw. */

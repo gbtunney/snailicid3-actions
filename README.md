@@ -30,11 +30,6 @@ jobs:
   detect:
     uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@v1
 
-  compare:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-compare-release-plan.yml@v1
-    with:
-      adapter_ref: v1
-
   release:
     permissions:
       contents: write
@@ -47,7 +42,6 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     with:
       adapter_ref: v1
-      # phase_source: detector  # rollback to pre-cutover phase selection
 
   apply:
     permissions:
@@ -77,54 +71,40 @@ per-workflow minimums are in [`templates/README.md`](templates/README.md), and
 Release truth lives in `@snailicid3/workspace`, not here. It owns release
 intent, exact-version registry observation, per-package status and the Markdown
 that reports them, and publishes that as a versioned JSON document.
-`call-release-plan.yml` now selects its release phase from that document.
+`call-release-plan.yml` selects its release phase from that document, and from
+nothing else.
 
 The adapter pins `@snailicid3/workspace@0.2.0` and validates `schemaVersion: 1`
 before it reads a single plan field. An unsupported version is rejected
 explicitly rather than guessed at — package SemVer is not a proxy for the schema
-the document declares — and because selection is now the active path, a plan
-that fails validation stops the run rather than falling back silently.
+the document declares — and a plan that fails validation stops the run rather
+than degrading to a guess.
 
-**Rolling back.** One switch restores the previous behaviour:
+`call-detect-release-state.yml` still runs on every release, and still exists as
+a reusable workflow for callers that report release state. It no longer decides
+anything here. It survives inside `call-release-plan.yml` for one reason: it
+owns the pending-changeset filenames `schemaVersion: 1` does not carry, and the
+version branch is still named from them.
 
-```yaml
-with:
-  phase_source: detector # default: canonical
-```
-
-That returns phase selection to the `call-detect-release-state.yml` derivation
-exactly as it was before the cutover. The detector still runs on every release
-regardless, both because it supplies fields the schema does not carry and so
-its result can be reported beside the canonical one on every run. Nothing falls
-back automatically: an automatic fallback would make the switch a lie about
-which derivation actually ran.
-
-**Phases name what a ref looks like, never what may be done to it.** The
-detector read a missing exact version as a publish candidate; the canonical plan
-reads it as held inventory and offers no publish operation for it. So
-`pending_release` now means "the registry is missing package versions this
-workspace holds", and `should_publish` is `false` for every read-only
-observation. Publishing still requires what it always did: an explicit
-non-dry-run invocation that clears the real-release guard. A caller that used
-`should_publish` to mean "there is something to release" wants
-`release_inventory_count`.
+**Phases name what a ref looks like, never what may be done to it.**
+`pending_release` means "the registry is missing package versions this workspace
+holds", and `should_publish` is `false` for every read-only observation.
+Publishing requires what it always did: an explicit non-dry-run invocation that
+clears the real-release guard. A caller that used `should_publish` to mean
+"there is something to release" wants `release_inventory_count`.
 
 Which outputs come from where:
 
 | Output | Source |
 | --- | --- |
-| `release_phase`, `should_version`, `should_publish` | canonical plan (detector on rollback) |
+| `release_phase`, `should_version`, `should_publish` | canonical plan |
+| `publish_candidates`, `release_inventory_count` | canonical plan |
 | `should_skip` | derived from the selected phase, so it always matches which jobs ran |
-| `publish_candidates`, `release_inventory_count` | canonical plan (detector on rollback) |
 | `changeset_count`, `changeset_slugs`, `primary_changeset_slug` | detector only — `schemaVersion: 1` does not carry changeset filenames |
 | `new_package_count`, `new_version_count` | detector only — the plan records whether an exact `name@version` exists, not whether the name itself is new |
 
-Fields the schema does not carry stay explicitly unavailable rather than
-approximated. `bin/workspace-release-plan.ts` holds the full ledger of which
-outputs are expected to agree, which differ on purpose, and which are unmapped.
-
-`call-compare-release-plan.yml` remains available as a standalone, secretless,
-non-enforcing dual run for observing a ref without touching a release path.
+Fields the schema does not carry stay explicitly detector-derived rather than
+approximated from the plan.
 
 ### Pipeline policy
 
@@ -256,7 +236,7 @@ pnpm exec scope-commit --staged --message <type> "<subject>"
   build/test the repository, while the major of `actions/checkout@v7` or
   `actions/setup-node@v7` selects the runtime bundled by that GitHub Action.
 - `dependencies` in `package.json` is the adapter's runtime closure — what a
-  consumer's CI installs to run `bin/compare-release-plan.ts` with
+  consumer's CI installs to run `bin/release-plan.ts` with
   `pnpm install --prod`. `devDependencies` is this repository's own self-test
   toolchain. `@snailicid3/workspace` owns its dependency closure, so Logger,
   Node Utils, Utils, Color and Types are never installed here by name.
@@ -272,18 +252,14 @@ composite actions, reusable release workflows, scope-commit derivation,
 lockfile policy, caller contracts, template sync/drift/orphan detection, and
 YAML parsing.
 
-The release-plan adapter is covered three ways. `pnpm test:adapter` runs offline
+The release-plan adapter is covered twice. `pnpm test:adapter` runs offline
 against the recorded `#232`/`#233`/`#234` documents and proves that an
-unsupported `schemaVersion` is refused before any field is read, that the
-mapping reproduces those cases, and that canonical phase selection reaches the
-same phase the detector did without ever authorizing publication from registry
-absence. `compare_release_plan` runs the real dual run against this repository's
-own fixture workspace, where the two derivations are expected to agree
-completely. `assert_phase_cutover` then runs `call-release-plan.yml` twice —
-once by default and once with `phase_source: detector` — and requires that
-canonical selection is what runs by default, that the rollback switch really
-reaches the detector derivation, that both select the same phase, and that the
-observation reports `should_publish: false`.
+unsupported `schemaVersion` is refused before any field is read, that those
+documents still select the phases those commits produced, and that a missing
+registry version never becomes permission to publish it. `assert_phase_cutover`
+then runs the real `call-release-plan.yml` against this repository's own fixture
+workspace and requires that it reaches `main` and reports
+`should_publish: false`.
 
 ### Cross-repository smoke
 
