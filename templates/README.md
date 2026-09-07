@@ -76,6 +76,7 @@ file does not exist. Callers outside this repository always use
 | Reusable workflow | Secrets | Consumed by | Permissions a caller must grant |
 | --- | --- | --- | --- |
 | `call-detect-release-state.yml` | — | read-only detection | `contents: read` |
+| `call-compare-release-plan.yml` | — | non-enforcing dual run of the detector against the canonical `@snailicid3/workspace` release plan | `contents: read` |
 | `call-pipeline.yml` | — | predictable repository build/test/check/docs routines | `contents: read` |
 | `call-nx-targets.yml` | — | explicit ad-hoc `nx run-many` / `nx affected` target execution | `contents: read` |
 | `call-apply-workspace-artifact.yml` | `GH_PAT`, `NPM_TOKEN` | `GH_PAT`: checkout/push. `NPM_TOKEN`: exported as `NODE_AUTH_TOKEN` for `post_overlay_command` only | `contents: write`, `actions: read`, `id-token: write` |

@@ -1,0 +1,21 @@
+{
+    "checked_ref": "e78f39e",
+    "changeset_count": 1,
+    "changeset_slugs": "whole-banks-swim",
+    "primary_changeset_slug": "whole-banks-swim",
+    "has_pending_changesets": true,
+    "package_count": 12,
+    "public_package_count": 10,
+    "private_package_count": 2,
+    "invalid_package_count": 0,
+    "new_package_count": null,
+    "new_version_count": null,
+    "already_published_count": 10,
+    "lookup_failed_count": 0,
+    "publish_candidate_count": 0,
+    "publish_candidates": "",
+    "has_publish_candidates": false,
+    "should_version": true,
+    "should_publish": false,
+    "should_skip": false
+}

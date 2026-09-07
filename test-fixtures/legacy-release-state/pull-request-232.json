@@ -1,0 +1,21 @@
+{
+    "checked_ref": "a7093c8",
+    "changeset_count": 0,
+    "changeset_slugs": "",
+    "primary_changeset_slug": "",
+    "has_pending_changesets": false,
+    "package_count": 12,
+    "public_package_count": 10,
+    "private_package_count": 2,
+    "invalid_package_count": 0,
+    "new_package_count": null,
+    "new_version_count": null,
+    "already_published_count": 8,
+    "lookup_failed_count": 0,
+    "publish_candidate_count": 2,
+    "publish_candidates": "@snailicid3/storybook-config@0.1.0 @snailicid3/workspace@0.1.0",
+    "has_publish_candidates": true,
+    "should_version": false,
+    "should_publish": true,
+    "should_skip": false
+}
