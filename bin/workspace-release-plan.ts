@@ -8,9 +8,11 @@
  * already consume. Nothing in this module recomputes registry state, release intent, per-package status, or publish
  * eligibility — every one of those is read from the plan.
  *
- * This module is not wired into the active release path. `call-detect-release-state.yml` remains the detector that
- * decides anything, and `call-compare-release-plan.yml` runs this adapter beside it in non-enforcing comparison mode.
+ * `selectReleasePhase` is now the active source of release phase selection in `call-release-plan.yml`.
+ * `call-detect-release-state.yml` is preserved as the deliberate rollback path, reachable by setting that workflow's
+ * `phase_source` input to `detector`.
  *
+ * @see file://./../.github/workflows/call-release-plan.yml
  * @see file://./../.github/workflows/call-compare-release-plan.yml
  */
 
@@ -219,6 +221,83 @@ export interface ReleaseStateComparison {
     rows: ReleaseStateComparisonRow[]
 }
 
+/**
+ * The phases `call-release-plan.yml` selects between.
+ *
+ * A phase names what a ref *looks like*, never what may be done to it. `pending_release` in particular says the
+ * registry is missing package versions this workspace holds — inventory — and says nothing about permission to publish
+ * them. Authorization stays where it already was: an explicit non-dry-run invocation that clears `guard_real_release`.
+ */
+export type ReleasePhase = 'main' | 'pending_changeset' | 'pending_release'
+
+export interface ReleasePhaseSelection {
+    phase: ReleasePhase
+    /**
+     * Whether the plan offers a publish operation at all.
+     *
+     * Read straight from the mapped plan, and false for every observation. It is reported beside the phase so a reader
+     * can see that reaching `pending_release` did not grant anything.
+     */
+    publishAuthorized: boolean
+    reason: string
+}
+
+/**
+ * Select the release phase from the canonical plan's mapped outputs.
+ *
+ * Every input is a value the plan recorded; nothing here re-derives release eligibility. Order encodes precedence and
+ * matches the rule the detector used, with one deliberate difference: the second branch tests *inventory*
+ * (`pending_inventory_count`) rather than the detector's `publish_candidate_count`, because the canonical plan reports
+ * a missing exact version as held inventory and offers no publish operation for it. Selecting the phase from
+ * authorization instead would make `pending_release` unreachable and silently strand the manual release path.
+ */
+export function selectReleasePhase(
+    mapped: LegacyReleaseStateOutputs,
+): ReleasePhaseSelection {
+    const publishAuthorized = mapped.should_publish
+
+    if (mapped.should_version) {
+        return {
+            phase: 'pending_changeset',
+            publishAuthorized,
+            reason: 'The plan records pending release intent for at least one package.',
+        }
+    }
+
+    if (mapped.pending_inventory_count > 0) {
+        return {
+            phase: 'pending_release',
+            publishAuthorized,
+            reason: `${mapped.pending_inventory_count} package version(s) are absent from the registry. That is inventory: publication still requires an explicitly selected operation.`,
+        }
+    }
+
+    return {
+        phase: 'main',
+        publishAuthorized,
+        reason: 'The plan records no pending release intent and no absent package versions.',
+    }
+}
+
+/**
+ * Reproduce the phase the detector's own outputs imply.
+ *
+ * Display and rollback-review only. The rollback path itself keeps its original derivation in
+ * `call-release-plan.yml`, so this is never the rule that selects a phase — it exists so a dual run can show the two
+ * results side by side without a reader having to reconstruct the legacy one by hand.
+ */
+export function deriveDetectorPhase(
+    legacy: LegacyReleaseStateRecord,
+): 'main' | 'pending_changeset' | 'pending_release' | 'unknown' {
+    if (legacy.should_version === undefined && legacy.should_publish === undefined) {
+        return 'unknown'
+    }
+    if (legacy.should_version === true) return 'pending_changeset'
+    if (legacy.should_publish === true) return 'pending_release'
+
+    return 'main'
+}
+
 /** Recorded legacy detector output, as read from a fixture or from a live detector job. */
 export type LegacyReleaseStateRecord = Partial<
     Record<keyof LegacyReleaseStateOutputs, unknown>
@@ -400,6 +479,40 @@ export function readReleasePlanDocument(
             .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
             .join('; ')}`,
     }
+}
+
+/**
+ * Render the phase selection, with the detector's own result beside it.
+ *
+ * Kept separate from the field comparison so the phase — the thing that now drives the workflow — is not buried in a
+ * twenty-row table.
+ */
+export function renderPhaseSelectionMarkdown(
+    selection: ReleasePhaseSelection,
+    detectorPhase: string,
+): string {
+    const agreement =
+        detectorPhase === 'unknown'
+            ? 'No detector outputs were supplied, so there is nothing to compare against.'
+            : detectorPhase === selection.phase
+              ? 'The canonical plan and the detector select the same phase.'
+              : `The canonical plan selects \`${selection.phase}\` where the detector selects \`${detectorPhase}\`.`
+
+    return [
+        '## Release phase',
+        '',
+        `- **Canonical phase:** \`${selection.phase}\``,
+        `- **Detector phase:** \`${detectorPhase}\``,
+        `- **Publish authorized by the plan:** \`${selection.publishAuthorized}\``,
+        '',
+        selection.reason,
+        '',
+        agreement,
+        '',
+        'Reaching `pending_release` is not permission to publish. It reports that the registry is missing package',
+        'versions this workspace holds; publication still requires an explicit non-dry-run invocation that clears the',
+        'real-release guard.',
+    ].join('\n')
 }
 
 /** Render the dual run as Markdown, with the canonical plan drawn by the Workspace renderer. */

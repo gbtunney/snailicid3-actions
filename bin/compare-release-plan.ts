@@ -25,11 +25,14 @@ import {
 } from './release-state-fixtures.js'
 import {
     compareReleaseState,
+    deriveDetectorPhase,
     type LegacyReleaseStateRecord,
     mapReleasePlanToLegacyOutputs,
     produceWorkspaceReleasePlan,
     readReleasePlanDocument,
     renderComparisonMarkdown,
+    renderPhaseSelectionMarkdown,
+    selectReleasePhase,
 } from './workspace-release-plan.js'
 
 interface Options {
@@ -123,9 +126,16 @@ if (!validated.ok) {
     process.exit(1)
 }
 
+const legacy = readDetectorOutputs(options.detector)
 const mapped = mapReleasePlanToLegacyOutputs(validated.plan)
-const comparison = compareReleaseState(mapped, readDetectorOutputs(options.detector))
-const markdown = renderComparisonMarkdown(validated.plan, comparison)
+const comparison = compareReleaseState(mapped, legacy)
+const selection = selectReleasePhase(mapped)
+const detectorPhase = deriveDetectorPhase(legacy)
+const markdown = [
+    renderPhaseSelectionMarkdown(selection, detectorPhase),
+    '',
+    renderComparisonMarkdown(validated.plan, comparison),
+].join('\n')
 
 console.log(markdown)
 
@@ -142,6 +152,17 @@ if (options.outputs !== null) {
             `schema_version=${validated.plan.schemaVersion}`,
             `divergent_field_count=${comparison.divergent.length}`,
             `divergent_fields=${comparison.divergent.map((row) => row.field).join(' ')}`,
+            // Phase selection. `call-release-plan.yml` consumes these when its phase_source is canonical.
+            `release_phase=${selection.phase}`,
+            `release_phase_reason=${selection.reason}`,
+            `detector_release_phase=${detectorPhase}`,
+            `publish_authorized=${selection.publishAuthorized}`,
+            // The legacy output names, populated from the canonical plan.
+            `should_version=${mapped.should_version}`,
+            `should_publish=${mapped.should_publish}`,
+            `should_skip=${mapped.should_skip}`,
+            `release_inventory=${mapped.pending_inventory}`,
+            `release_inventory_count=${mapped.pending_inventory_count}`,
             '',
         ].join('\n'),
     )
