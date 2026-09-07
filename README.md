@@ -30,6 +30,11 @@ jobs:
   detect:
     uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@v1
 
+  compare:
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-compare-release-plan.yml@v1
+    with:
+      adapter_ref: v1
+
   release:
     permissions:
       contents: write
@@ -63,6 +68,38 @@ replaces the workflow-level one rather than merging with it, so a restrictive
 workflow-level floor plus a per-job minimum keeps read-only jobs read-only. The
 per-workflow minimums are in [`templates/README.md`](templates/README.md), and
 `bin/check-caller-contract.ts` enforces them on every PR.
+
+### Release-plan adapter (comparison only)
+
+Release truth is moving out of this repository. `@snailicid3/workspace` owns
+release intent, exact-version registry observation, per-package status and the
+Markdown that reports them, and publishes that as a versioned JSON document.
+`call-compare-release-plan.yml` is the first step of consuming it: it observes a
+ref through the canonical producer, maps the plan onto the output names
+`call-detect-release-state.yml` already produces, and prints the two side by
+side.
+
+It decides nothing:
+
+- `call-detect-release-state.yml` is still the active path and the rollback
+  target. This slice does not change it and does not change phase selection in
+  `call-release-plan.yml`.
+- The comparison declares no secrets, only reads the registry, and never fails
+  a run on a difference.
+- The adapter pins `@snailicid3/workspace@0.2.0` and validates
+  `schemaVersion: 1` before it reads a single plan field. An unsupported
+  version is rejected explicitly rather than guessed at — package SemVer is not
+  a proxy for the schema the document declares.
+
+The one difference worth knowing about before cutover is deliberate. The
+detector reads a missing exact version as a publish candidate; the canonical
+plan reads it as held inventory and offers no publish operation. On the
+historical `snailicid3` cases this shows up as `#233` agreeing on every field,
+and `#232`/`#234` differing only on `publish_candidate_count`,
+`publish_candidates`, `has_publish_candidates`, `should_publish` and
+`should_skip`. `bin/workspace-release-plan.ts` carries the full ledger of which
+outputs are expected to agree, which differ on purpose, and which
+`schemaVersion: 1` does not carry at all.
 
 ### Pipeline policy
 
@@ -193,6 +230,15 @@ pnpm exec scope-commit --staged --message <type> "<subject>"
 - Two Node versions are unrelated: `node_version` selects the Node used to
   build/test the repository, while the major of `actions/checkout@v7` or
   `actions/setup-node@v7` selects the runtime bundled by that GitHub Action.
+- `dependencies` in `package.json` is the adapter's runtime closure — what a
+  consumer's CI installs to run `bin/compare-release-plan.ts` with
+  `pnpm install --prod`. `devDependencies` is this repository's own self-test
+  toolchain. `@snailicid3/workspace` owns its dependency closure, so Logger,
+  Node Utils, Utils, Color and Types are never installed here by name.
+- Historical characterization documents live under `test-fixtures/`. The
+  canonical plans are byte-for-byte copies of the frozen documents in
+  `gbtunney/snailicid3`, because the published package ships only `dist` and
+  `types`.
 
 ## Self-tests
 
@@ -200,6 +246,14 @@ pnpm exec scope-commit --staged --message <type> "<subject>"
 composite actions, reusable release workflows, scope-commit derivation,
 lockfile policy, caller contracts, template sync/drift/orphan detection, and
 YAML parsing.
+
+The release-plan adapter is covered twice. `pnpm test:adapter` runs offline
+against the recorded `#232`/`#233`/`#234` documents and proves both that an
+unsupported `schemaVersion` is refused before any field is read and that the
+mapping reproduces those cases. `compare_release_plan` then runs the real dual
+run against this repository's own fixture workspace, where the detector and the
+canonical plan are expected to agree completely — a divergence there fails this
+repository's self-test while staying non-enforcing for consumers.
 
 ### Cross-repository smoke
 

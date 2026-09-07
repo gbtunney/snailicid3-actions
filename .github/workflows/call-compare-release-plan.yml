@@ -1,0 +1,188 @@
+name: z Call Compare Release Plan
+
+# ─────────────────────────────────────────────────────────────
+# WORKFLOW: Compare Release Plan
+# TYPE: reusable workflow_call
+# SOURCE: gbtunney/snailicid3-actions
+#
+# Purpose:
+#   Run the canonical @snailicid3/workspace release plan beside the existing
+#   detector and report, field by field, where the two agree and where they
+#   intentionally do not.
+#
+# This workflow decides nothing. It is the non-enforcing half of the adapter
+# migration tracked in gbtunney/snailicid3-actions#25:
+#
+#   call-detect-release-state.yml
+#     Still the active path. Unchanged by this workflow, and still the
+#     rollback target for as long as the comparison is unproven.
+#
+#   call-compare-release-plan.yml
+#     Observes the same ref through @snailicid3/workspace, maps the canonical
+#     plan onto the detector's output names, and prints the comparison.
+#
+# Safety:
+#   - Read-only. Nothing is versioned, tagged, committed or published, and the
+#     registry is only ever read.
+#   - Declares no secrets. Exact-version observation is an anonymous read, and
+#     a workflow that cannot authenticate cannot publish by accident.
+#   - Never fails on a difference. The compare step reports; the detector's
+#     result is what the surrounding workflows still act on.
+#   - Registry absence is inventory. The canonical plan reports a missing
+#     exact version as held inventory and offers no publish operation, which
+#     is the difference this comparison exists to make visible.
+# ─────────────────────────────────────────────────────────────
+
+on:
+    workflow_call:
+        inputs:
+            ref:
+                description: >
+                    Git ref, branch, tag, or SHA to observe. Leave empty to observe the triggering commit.
+                required: false
+                type: string
+                default: ''
+
+            adapter_ref:
+                description: >
+                    Ref of gbtunney/snailicid3-actions to take the adapter from. Consumers should pin the same
+                    tag they call this workflow at.
+                required: false
+                type: string
+                default: main
+
+            node_version:
+                description: Node version used to run the adapter. Prefer a concrete major so setup-node resolves
+                    from the runner toolcache.
+                required: false
+                type: string
+                default: '24'
+
+        outputs:
+            schema_version:
+                description: Release-plan schemaVersion the adapter accepted. Informational.
+                value: ${{ jobs.compare.outputs.schema_version }}
+
+            divergent_field_count:
+                description: >
+                    Number of fields expected to agree that did not. Informational only — no caller in this slice
+                    branches on it, and a non-zero value does not fail the run.
+                value: ${{ jobs.compare.outputs.divergent_field_count }}
+
+            divergent_fields:
+                description: Space-delimited names of the fields expected to agree that did not. Informational.
+                value: ${{ jobs.compare.outputs.divergent_fields }}
+
+permissions:
+    contents: read
+
+jobs:
+    detect:
+        name: detect release state
+        uses: ./.github/workflows/call-detect-release-state.yml
+        with:
+            ref: ${{ inputs.ref }}
+
+    compare:
+        name: compare canonical plan
+        needs: detect
+        runs-on: ubuntu-latest
+
+        outputs:
+            schema_version: ${{ steps.compare.outputs.schema_version }}
+            divergent_field_count: ${{ steps.compare.outputs.divergent_field_count }}
+            divergent_fields: ${{ steps.compare.outputs.divergent_fields }}
+
+        steps:
+            # Two checkouts, because the adapter and the repository it observes
+            # are different things. The observed repository is never installed
+            # or built: reading its workspace manifests and asking npm about
+            # exact versions is all an observation needs.
+            - name: Checkout observed ref
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+                  ref: ${{ inputs.ref || github.sha }}
+                  path: observed
+
+            - name: Checkout release-plan adapter
+              uses: actions/checkout@v7
+              with:
+                  repository: gbtunney/snailicid3-actions
+                  ref: ${{ inputs.adapter_ref }}
+                  path: adapter
+
+            # Both checkouts land in subdirectories, so the workspace root
+            # holds no package.json and the action has no `packageManager` to
+            # read a version from. Point it at the adapter's own manifest,
+            # which is the one whose pnpm actually runs here.
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+                  package_json_file: adapter/package.json
+
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: ${{ inputs.node_version }}
+
+            # --prod installs the adapter's own runtime closure only:
+            # @snailicid3/workspace and the TypeScript runner. This
+            # repository's self-test toolchain is not needed to observe a
+            # consumer, and @snailicid3/workspace owns its own dependencies —
+            # Logger, Node Utils and Utils are never installed here by name.
+            - name: Install adapter dependencies
+              working-directory: adapter
+              run: pnpm install --frozen-lockfile --prod
+
+            - name: Collect detector outputs
+              id: detector
+              shell: bash
+              env:
+                  DETECTOR_OUTPUTS: ${{ toJSON(needs.detect.outputs) }}
+              run: |
+                  set -euo pipefail
+                  printf '%s\n' "$DETECTOR_OUTPUTS" > "$RUNNER_TEMP/detector-outputs.json"
+                  echo "path=$RUNNER_TEMP/detector-outputs.json" >> "$GITHUB_OUTPUT"
+
+            # continue-on-error keeps the comparison non-enforcing even if the
+            # adapter itself throws: an unproven adapter must not be able to
+            # fail a consumer's release reporting.
+            - name: Compare canonical plan against the detector
+              id: compare
+              continue-on-error: true
+              working-directory: adapter
+              run: |
+                  pnpm exec tsx bin/compare-release-plan.ts \
+                    --repo-root "$GITHUB_WORKSPACE/observed" \
+                    --detector "${{ steps.detector.outputs.path }}" \
+                    --plan-out "$GITHUB_WORKSPACE/release-plan.json" \
+                    --summary "$GITHUB_STEP_SUMMARY" \
+                    --outputs "$GITHUB_OUTPUT"
+
+            - name: Report a failed comparison without failing the run
+              if: ${{ steps.compare.outcome == 'failure' }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  echo "::warning::The release-plan comparison did not complete. The detector remains the active path."
+                  {
+                    echo "## Release-state dual run (non-enforcing)"
+                    echo ""
+                    echo "The comparison step failed. This does not change the detector's result, which is still what"
+                    echo "the surrounding workflows act on."
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+            # The plan is written into the workspace rather than the temp
+            # directory because `hashFiles` only sees paths under
+            # GITHUB_WORKSPACE; from the temp directory it returns empty and
+            # silently skips the upload. `if-no-files-found: ignore` covers the
+            # case where the comparison step failed before writing anything.
+            - name: Upload the observed release plan
+              if: ${{ always() }}
+              uses: actions/upload-artifact@v7
+              with:
+                  name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: release-plan.json
+                  if-no-files-found: ignore

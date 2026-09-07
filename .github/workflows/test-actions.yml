@@ -340,6 +340,74 @@ jobs:
                     echo "::error::Expected the overlaid marker file to leave the workspace dirty."
                     exit 1
                   fi
+    release_plan_adapter:
+        name: release plan adapter
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  cache: pnpm
+
+            # The adapter runs in consumer CI from its runtime closure alone,
+            # so prove that closure is sufficient before proving the mapping.
+            - name: Install adapter runtime dependencies only
+              run: pnpm install --frozen-lockfile --prod
+
+            - name: Prove the adapter rejects unsupported schemaVersions and reproduces #232/#233/#234
+              run: pnpm test:adapter
+
+    compare_release_plan:
+        name: compare release plan
+        uses: ./.github/workflows/call-compare-release-plan.yml
+        with:
+            adapter_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    assert_comparison:
+        name: assert dual run
+        needs: compare_release_plan
+        runs-on: ubuntu-latest
+        steps:
+            # The fixture repository holds one private package and no
+            # changesets, so the detector and the canonical plan should agree
+            # on every field that is expected to agree. A difference here is
+            # either adapter drift or a change to the fixture's own shape, and
+            # both are worth stopping on in this repository's own self-test —
+            # the comparison stays non-enforcing for consumers.
+            - name: Dual run must agree on the fixture repository
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  schema_version="${{ needs.compare_release_plan.outputs.schema_version }}"
+                  divergent_count="${{ needs.compare_release_plan.outputs.divergent_field_count }}"
+                  divergent_fields="${{ needs.compare_release_plan.outputs.divergent_fields }}"
+
+                  echo "schema_version=$schema_version"
+                  echo "divergent_field_count=$divergent_count"
+                  echo "divergent_fields=$divergent_fields"
+
+                  if [[ "$schema_version" != "1" ]]; then
+                    echo "::error::Expected the adapter to accept release-plan schemaVersion 1 (got '$schema_version')."
+                    exit 1
+                  fi
+
+                  if [[ "$divergent_count" != "0" ]]; then
+                    echo "::error::Detector and canonical plan disagreed on: $divergent_fields."
+                    exit 1
+                  fi
+
+                  echo "Detector and canonical plan agree on every field expected to agree."
+
     release_plan:
         name: release plan
         permissions:

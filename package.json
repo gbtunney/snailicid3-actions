@@ -5,15 +5,20 @@
     "packageManager": "pnpm@10.33.0",
     "type": "module",
     "description": "Fixture workspace so the workflows and composite actions in this repository can run against the published @snailicid3/config toolchain (snail-sh, scope-commit, scope-affected) in self-tests.",
+    "dependencies": {
+        "@snailicid3/workspace": "0.2.0",
+        "tsx": "^4.19.2"
+    },
     "devDependencies": {
         "@snailicid3/config": "^0.3.0",
         "@types/node": "^22.10.2",
         "prettier": "^3.8.4",
-        "tsx": "^4.19.2",
         "typescript": "^5.7.2"
     },
     "scripts": {
         "check:callers": "tsx bin/check-caller-contract.ts",
+        "compare:release-plan": "tsx bin/compare-release-plan.ts",
+        "test:adapter": "tsx bin/workspace-release-plan.test.ts",
         "test:callers": "tsx bin/check-caller-contract.test.ts && tsx bin/check-pr-concurrency.test.ts",
         "typecheck": "tsc --noEmit"
     }
