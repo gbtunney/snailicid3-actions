@@ -19,21 +19,34 @@ name: z Call Release Plan
 #     It can be used manually now and by push-main later.
 #
 # Current behavior:
-#   - Always detects release state.
-#   - Always prints a readable plan.
-#   - Optionally runs the validation/snapshot pipeline for publish candidates.
-#   - Creates/updates a Changesets version PR when pending changesets exist and dry_run=false.
-#   - Publishes validated release candidates when dry_run=false and no changesets remain.
+#   - Always produces the canonical release plan and prints it.
+#   - mode: observe reports the selected phase and changes nothing.
+#   - mode: release executes the selected phase — a Changesets version PR when
+#     intent is pending, or a validated publish when it is not.
+#
+# Caller contract:
+#   release_mode: manual | main   the repository's policy. manual releases only
+#                                 by dispatch; main also lets a push to the
+#                                 default branch release.
+#   mode:         observe | release   what this run does. Empty lets
+#                                 release_mode decide.
 #
 # Safety:
-#   - dry_run=true is the default expected caller behavior.
-#   - dry_run=false is blocked unless the checked ref is main, unless
-#     allow_non_main=true is explicitly passed.
+#   - observe is the default for everything except a push under
+#     release_mode: main.
+#   - A release away from the default branch is blocked unless
+#     allow_non_main=true.
+#   - A push cannot release unless the repository opted in with
+#     release_mode: main. Manual dispatch is always available.
+#   - A release's prerequisites (validation pipeline, workspace artifact) are
+#     derived, so a real release cannot silently no-op because an input was
+#     left at a non-releasing value.
+#   - Registry absence is inventory, never authorization.
 #
 # Secrets contract:
-#   Both secrets below are optional and only consumed on the dry_run=false
-#   path. Callers forward them by name — see templates/README.md. Nothing in
-#   this workflow relies on `secrets: inherit`.
+#   Both secrets below are optional and only consumed on the release path.
+#   Callers forward them by name — see templates/README.md. Nothing in this
+#   workflow relies on `secrets: inherit`.
 # ─────────────────────────────────────────────────────────────
 
 on:
@@ -53,33 +66,35 @@ on:
                 default: ''
                 type: string
 
-            dry_run:
-                description: Print what would happen without mutating or publishing.
+            release_mode:
+                description: >
+                    This repository's release policy. 'manual' means nothing releases automatically —
+                    releases happen by explicit dispatch. 'main' opts the repository into running the
+                    release policy automatically on pushes to its default branch. Manual dispatch works
+                    under either setting.
                 required: false
-                default: true
-                type: boolean
+                default: manual
+                type: string
+
+            mode:
+                description: >
+                    What this run should do. 'observe' reports the release plan and changes nothing;
+                    'release' executes the selected phase. Leave empty to let release_mode decide:
+                    a push under release_mode 'main' releases, and anything else observes.
+                required: false
+                default: ''
+                type: string
 
             allow_non_main:
-                description: Allow non-dry-run actions away from main. Keep false except for controlled tests.
+                description: Advanced. Allow a release away from the default branch. Keep false except for
+                    controlled tests.
                 required: false
                 default: false
                 type: boolean
 
-            run_pipeline:
-                description: Run the validation pipeline for publish candidates.
-                required: false
-                default: true
-                type: boolean
-
-            upload_workspace_artifact:
-                description: Upload a workspace snapshot artifact from the validation pipeline for inspection/handoff.
-                required: false
-                default: true
-                type: boolean
-
             lockfile_mode:
                 description: >
-                    How the install treats pnpm-lock.yaml. frozen fails when the lockfile no longer
+                    Advanced. How the install treats pnpm-lock.yaml. frozen fails when the lockfile no longer
                     satisfies the manifests; reconcile updates the existing lockfile as needed to
                     satisfy them. reconcile is not a reset: it does not delete the lockfile and
                     resolve from scratch.
@@ -88,20 +103,50 @@ on:
                 type: string
 
             node_version:
-                description: Node version to run the validation pipeline with. Prefer a concrete major (e.g. '24')
-                    over an alias like 'lts/*' so setup-node resolves from the runner toolcache instead of fetching
-                    GitHub's version manifest over the network.
+                description: Advanced. Node version to run the validation pipeline with. Prefer a concrete major
+                    (e.g. '24') over an alias like 'lts/*' so setup-node resolves from the runner toolcache instead
+                    of fetching GitHub's version manifest over the network.
                 required: false
                 default: '24'
                 type: string
 
             adapter_ref:
                 description: >
-                    Ref of gbtunney/snailicid3-actions to take the release-plan adapter from. Consumers should pin
-                    the same tag they call this workflow at.
+                    Advanced. Ref of gbtunney/snailicid3-actions to take the release-plan adapter from. Consumers
+                    should pin the same tag they call this workflow at.
                 required: false
                 default: main
                 type: string
+
+            # ── Deprecated. Accepted for one window so callers pinned to a tag
+            # published before `mode` existed keep working. Each maps onto the
+            # semantic modes above rather than running a second implementation.
+            dry_run:
+                description: >
+                    DEPRECATED — use mode instead. 'false' is read as mode 'release'; 'true' expresses no
+                    opinion, because it cannot be told apart from the default. Setting it alongside
+                    mode 'observe' is a conflict and fails.
+                required: false
+                default: true
+                type: boolean
+
+            run_pipeline:
+                description: >
+                    DEPRECATED — the validation pipeline is derived from mode. A release requires it, so
+                    setting this false with mode 'release' fails rather than silently skipping the
+                    validation a release depends on.
+                required: false
+                default: true
+                type: boolean
+
+            upload_workspace_artifact:
+                description: >
+                    DEPRECATED and ignored — the workspace artifact is derived. Publication consumes it, so a
+                    release always uploads one. Setting this false with mode 'release' fails rather than
+                    producing a release that silently publishes nothing.
+                required: false
+                default: true
+                type: boolean
 
         outputs:
             checked_ref:
@@ -111,6 +156,12 @@ on:
             release_phase:
                 description: pending_changeset | pending_release | main
                 value: ${{ jobs.plan.outputs.release_phase }}
+
+            execution:
+                description: >
+                    What this run actually did — observe | release. Resolved from mode, release_mode and the
+                    triggering event, so a caller can see which of the two it got without re-deriving it.
+                value: ${{ jobs.plan.outputs.execution }}
 
             should_version:
                 description: "'true' when release intent is pending."
@@ -132,7 +183,7 @@ on:
                 description: >
                     Space-delimited package@version entries whose exact version is absent from the registry. Retained
                     under its original name for existing callers; it is inventory, and publishing it still requires an
-                    explicit non-dry-run invocation that clears the real-release guard.
+                    explicit release run that clears the real-release guard.
                 value: ${{ jobs.plan.outputs.release_inventory }}
 
             release_inventory_count:
@@ -163,74 +214,17 @@ jobs:
     #
     # schemaVersion validation is the hard boundary, so an unreadable or
     # unsupported plan stops the release rather than degrading to a guess.
+    # The plan a release acts on and the report a pull request sees are the
+    # same document produced by the same workflow. Nothing here can publish:
+    # call-release-observe.yml declares contents: read and no secrets.
     canonical_plan:
         name: canonical release plan
         needs: detect
-        runs-on: ubuntu-latest
-
-        outputs:
-            schema_version: ${{ steps.plan.outputs.schema_version }}
-            release_phase: ${{ steps.plan.outputs.release_phase }}
-            release_phase_reason: ${{ steps.plan.outputs.release_phase_reason }}
-            publish_authorized: ${{ steps.plan.outputs.publish_authorized }}
-            should_version: ${{ steps.plan.outputs.should_version }}
-            should_publish: ${{ steps.plan.outputs.should_publish }}
-            release_inventory: ${{ steps.plan.outputs.release_inventory }}
-            release_inventory_count: ${{ steps.plan.outputs.release_inventory_count }}
-
-        steps:
-            # Two checkouts, because the adapter and the repository it observes
-            # are different things. The observed repository is never installed
-            # or built: reading its workspace manifests and asking npm about
-            # exact versions is all an observation needs.
-            - name: Checkout observed ref
-              uses: actions/checkout@v7
-              with:
-                  fetch-depth: 0
-                  ref: ${{ inputs.ref || github.sha }}
-                  path: observed
-
-            - name: Checkout release-plan adapter
-              uses: actions/checkout@v7
-              with:
-                  repository: gbtunney/snailicid3-actions
-                  ref: ${{ inputs.adapter_ref }}
-                  path: adapter
-
-            # Both checkouts land in subdirectories, so the workspace root holds
-            # no package.json for the action to read a version from.
-            - name: Setup pnpm
-              uses: pnpm/action-setup@v6
-              with:
-                  run_install: false
-                  package_json_file: adapter/package.json
-
-            - name: Setup Node
-              uses: actions/setup-node@v7
-              with:
-                  node-version: ${{ inputs.node_version }}
-
-            - name: Install adapter dependencies
-              working-directory: adapter
-              run: pnpm install --frozen-lockfile --prod
-
-            - name: Produce the canonical release plan
-              id: plan
-              working-directory: adapter
-              run: |
-                  pnpm exec tsx bin/release-plan.ts \
-                    --repo-root "$GITHUB_WORKSPACE/observed" \
-                    --plan-out "$GITHUB_WORKSPACE/release-plan.json" \
-                    --summary "$GITHUB_STEP_SUMMARY" \
-                    --outputs "$GITHUB_OUTPUT"
-
-            - name: Upload the selected release plan
-              if: ${{ always() }}
-              uses: actions/upload-artifact@v7
-              with:
-                  name: release-plan-selected-${{ github.run_id }}-${{ github.run_attempt }}
-                  path: release-plan.json
-                  if-no-files-found: ignore
+        uses: ./.github/workflows/call-release-observe.yml
+        with:
+            ref: ${{ inputs.ref }}
+            adapter_ref: ${{ inputs.adapter_ref }}
+            node_version: ${{ inputs.node_version }}
 
     plan:
         name: release plan
@@ -238,6 +232,7 @@ jobs:
         runs-on: ubuntu-latest
 
         outputs:
+            execution: ${{ steps.execution.outputs.execution }}
             release_phase: ${{ steps.phase.outputs.release_phase }}
             should_version: ${{ steps.phase.outputs.should_version }}
             should_publish: ${{ steps.phase.outputs.should_publish }}
@@ -254,6 +249,86 @@ jobs:
                     frozen|reconcile) ;;
                     *) echo "::error::Invalid lockfile_mode: ${{ inputs.lockfile_mode }}. Expected frozen or reconcile."; exit 1 ;;
                   esac
+
+            # One place resolves what this run does. Everything downstream reads
+            # the answer rather than re-deriving it from an input, so there is no
+            # second opinion about whether a run is a release.
+            #
+            # The deprecated booleans map onto the modes here; they never reach a
+            # job condition. `dry_run: true` is deliberately treated as "no
+            # opinion": it is also the default, so an explicit true and an unset
+            # input are indistinguishable, and reading it as "observe" would
+            # override a caller that asked for mode: release.
+            - name: Resolve execution mode
+              id: execution
+              shell: bash
+              env:
+                  MODE: ${{ inputs.mode }}
+                  RELEASE_MODE: ${{ inputs.release_mode }}
+                  DRY_RUN: ${{ inputs.dry_run }}
+                  RUN_PIPELINE: ${{ inputs.run_pipeline }}
+                  UPLOAD_ARTIFACT: ${{ inputs.upload_workspace_artifact }}
+                  EVENT_NAME: ${{ github.event_name }}
+              run: |
+                  set -euo pipefail
+
+                  case "$RELEASE_MODE" in
+                    manual|main) ;;
+                    *) echo "::error::Invalid release_mode: '$RELEASE_MODE'. Expected manual or main."; exit 1 ;;
+                  esac
+
+                  case "$MODE" in
+                    ''|observe|release) ;;
+                    *) echo "::error::Invalid mode: '$MODE'. Expected observe or release."; exit 1 ;;
+                  esac
+
+                  # An explicit observe alongside an explicit dry_run: false is a
+                  # caller contradicting itself about the one thing that matters.
+                  if [ "$MODE" = "observe" ] && [ "$DRY_RUN" = "false" ]; then
+                    echo "::error::Conflicting inputs: mode 'observe' with dry_run 'false'. dry_run is deprecated; set mode alone."
+                    exit 1
+                  fi
+
+                  if [ -n "$MODE" ]; then
+                    execution="$MODE"
+                    reason="mode: $MODE"
+                  elif [ "$DRY_RUN" = "false" ]; then
+                    execution="release"
+                    reason="deprecated dry_run: false"
+                    echo "::warning::dry_run is deprecated. Set mode: release instead."
+                  elif [ "$EVENT_NAME" = "push" ] && [ "$RELEASE_MODE" = "main" ]; then
+                    execution="release"
+                    reason="release_mode: main on a push"
+                  else
+                    execution="observe"
+                    reason="default for release_mode: $RELEASE_MODE on $EVENT_NAME"
+                  fi
+
+                  # A release's prerequisites are derived, never clicked. Refusing
+                  # here is the point: a release that quietly skips validation, or
+                  # publishes nothing because an artifact was never uploaded, is
+                  # worse than one that does not start.
+                  if [ "$execution" = "release" ]; then
+                    if [ "$RUN_PIPELINE" = "false" ]; then
+                      echo "::error::mode 'release' requires the validation pipeline, but run_pipeline is false. run_pipeline is deprecated and derived; remove it."
+                      exit 1
+                    fi
+                    if [ "$UPLOAD_ARTIFACT" = "false" ]; then
+                      echo "::error::mode 'release' publishes from the workspace artifact, but upload_workspace_artifact is false. It is deprecated and derived; remove it."
+                      exit 1
+                    fi
+
+                    # An automatic push-triggered release needs the repository to
+                    # have opted in. Dispatch is always allowed: it is the
+                    # explicit escape hatch.
+                    if [ "$EVENT_NAME" = "push" ] && [ "$RELEASE_MODE" != "main" ]; then
+                      echo "::error::A push cannot release under release_mode '$RELEASE_MODE'. Set release_mode: main to enable automatic releases, or dispatch the release manually."
+                      exit 1
+                    fi
+                  fi
+
+                  echo "execution=$execution" >> "$GITHUB_OUTPUT"
+                  echo "Execution: $execution ($reason)"
 
             - name: Decide release phase
               id: phase
@@ -321,14 +396,14 @@ jobs:
                   set -euo pipefail
 
                   phase="${{ steps.phase.outputs.release_phase }}"
-                  dry_run="${{ inputs.dry_run }}"
+                  execution="${{ steps.execution.outputs.execution }}"
 
                   {
                     echo "## 🧭 Release plan"
                     echo ""
                     echo "- input ref: ${{ inputs.ref || 'github.sha' }}"
                     echo "- checked ref: ${{ needs.detect.outputs.checked_ref }}"
-                    echo "- dry run: ${{ inputs.dry_run }}"
+                    echo "- execution: ${{ steps.execution.outputs.execution }} (release_mode: ${{ inputs.release_mode }})"
                     echo "- allow non-main: ${{ inputs.allow_non_main }}"
                     echo "- phase: $phase"
                     echo ""
@@ -357,7 +432,7 @@ jobs:
 
                     if [ "$phase" = "pending_changeset" ]; then
                       echo "This ref has pending release intent."
-                      if [ "$dry_run" = "true" ]; then
+                      if [ "$execution" = "observe" ]; then
                         echo "Dry run: would create or update a Changesets version PR."
                       else
                         echo "Real mode: would create or update a Changesets version PR."
@@ -365,7 +440,7 @@ jobs:
                     elif [ "$phase" = "pending_release" ]; then
                       echo "This ref holds package versions the registry does not have, and no pending release intent."
                       echo "That is inventory, not authorization to publish it."
-                      if [ "$dry_run" = "true" ]; then
+                      if [ "$execution" = "observe" ]; then
                         echo "Dry run: would validate and prepare release candidate artifacts."
                         echo "Dry run: inventory is ${{ steps.phase.outputs.release_inventory }}."
                       else
@@ -379,8 +454,9 @@ jobs:
     guard_real_release:
         name: guard real release
         needs: [detect, plan]
+        if: ${{ needs.plan.outputs.execution == 'release' }}
+
         runs-on: ubuntu-latest
-        if: ${{ inputs.dry_run == false }}
 
         steps:
             - name: Block unsafe non-main real release
@@ -392,23 +468,23 @@ jobs:
                   allow_non_main="${{ inputs.allow_non_main }}"
 
                   if [ "$allow_non_main" = "true" ]; then
-                    echo "allow_non_main=true; non-main real mode is allowed for this run."
+                    echo "allow_non_main=true; a release away from main is allowed for this run."
                     exit 0
                   fi
 
                   if [ -z "$requested_ref" ] || [ "$requested_ref" = "main" ] || [ "$requested_ref" = "refs/heads/main" ]; then
-                    echo "Real release mode allowed for main/default triggering ref."
+                    echo "Release allowed for the main/default triggering ref."
                     exit 0
                   fi
 
-                  echo "::error::dry_run=false is only allowed for main unless allow_non_main=true."
+                  echo "::error::mode 'release' is only allowed for main unless allow_non_main=true."
                   echo "requested_ref=$requested_ref"
                   exit 1
 
     pending_changeset:
         name: pending changeset version PR
         needs: [detect, plan, guard_real_release]
-        if: ${{ always() && needs.plan.outputs.release_phase == 'pending_changeset' && (inputs.dry_run == true || needs.guard_real_release.result == 'success') }}
+        if: ${{ always() && needs.plan.outputs.release_phase == 'pending_changeset' && (needs.plan.outputs.execution == 'observe' || needs.guard_real_release.result == 'success') }}
         runs-on: ubuntu-latest
         env:
             HUSKY: 0
@@ -465,7 +541,7 @@ jobs:
                   echo "Resolved release branch: $release_branch"
 
             - name: Plan version PR action
-              if: ${{ inputs.dry_run == true }}
+              if: ${{ needs.plan.outputs.execution == 'observe' }}
               shell: bash
               run: |
                   set -euo pipefail
@@ -475,13 +551,13 @@ jobs:
                   echo "Dry run: commit and PR title would be derived via scope-commit (release(<scopes>): version packages)."
 
             - name: Setup pnpm
-              if: ${{ inputs.dry_run == false }}
+              if: ${{ needs.plan.outputs.execution == 'release' }}
               uses: pnpm/action-setup@v6
               with:
                   run_install: false
 
             - name: Setup Node
-              if: ${{ inputs.dry_run == false }}
+              if: ${{ needs.plan.outputs.execution == 'release' }}
               uses: actions/setup-node@v7
               with:
                   node-version: ${{ inputs.node_version }}
@@ -489,7 +565,7 @@ jobs:
                   cache-dependency-path: pnpm-lock.yaml
 
             - name: Install dependencies
-              if: ${{ inputs.dry_run == false }}
+              if: ${{ needs.plan.outputs.execution == 'release' }}
               shell: bash
               run: |
                   set -euo pipefail
@@ -500,12 +576,12 @@ jobs:
                   fi
 
             - name: Version packages
-              if: ${{ inputs.dry_run == false }}
+              if: ${{ needs.plan.outputs.execution == 'release' }}
               run: pnpm changeset version
 
             - name: Stage and compute release title
               id: version_msg
-              if: ${{ inputs.dry_run == false }}
+              if: ${{ needs.plan.outputs.execution == 'release' }}
               shell: bash
               run: |
                   set -euo pipefail
@@ -528,7 +604,7 @@ jobs:
                   echo "Release message: $msg"
 
             - name: Commit version changes
-              if: ${{ inputs.dry_run == false }}
+              if: ${{ needs.plan.outputs.execution == 'release' }}
               shell: bash
               run: |
                   set -euo pipefail
@@ -542,11 +618,11 @@ jobs:
                     -m "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
             - name: Push release branch
-              if: ${{ inputs.dry_run == false }}
+              if: ${{ needs.plan.outputs.execution == 'release' }}
               run: git push origin HEAD:refs/heads/${{ steps.release_branch.outputs.branch }} --force
 
             - name: Create or update version PR
-              if: ${{ inputs.dry_run == false }}
+              if: ${{ needs.plan.outputs.execution == 'release' }}
               shell: bash
               env:
                   GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
@@ -577,17 +653,17 @@ jobs:
                   {
                     echo "## 🧾 Pending changeset version PR"
                     echo ""
-                    echo "- dry_run: ${{ inputs.dry_run }}"
+                    echo "- execution: ${{ needs.plan.outputs.execution }}"
                     echo "- source_ref: ${{ inputs.ref || github.sha }}"
                     echo "- changeset_count: ${{ needs.detect.outputs.changeset_count }}"
                     echo "- target_branch: ${{ steps.release_branch.outputs.branch }}"
-                    echo "- title: ${{ steps.version_msg.outputs.message || 'derived via scope-commit (dry run: not computed)' }}"
+                    echo "- title: ${{ steps.version_msg.outputs.message || 'derived via scope-commit (observe: not computed)' }}"
                   } >> "$GITHUB_STEP_SUMMARY"
 
     pending_release_pipeline:
         name: pending release candidate pipeline
         needs: [detect, plan, guard_real_release]
-        if: ${{ always() && inputs.run_pipeline == true && needs.plan.outputs.release_phase == 'pending_release' && (inputs.dry_run == true || needs.guard_real_release.result == 'success') }}
+        if: ${{ always() && (needs.plan.outputs.execution == 'release' || inputs.run_pipeline == true) && needs.plan.outputs.release_phase == 'pending_release' && (needs.plan.outputs.execution == 'observe' || needs.guard_real_release.result == 'success') }}
         uses: ./.github/workflows/call-pipeline.yml
         with:
             mode: abort_on_error
@@ -599,13 +675,15 @@ jobs:
             api_report_mode: check
             require_clean_repo: true
             node_version: ${{ inputs.node_version }}
-            upload_workspace_artifact: ${{ inputs.upload_workspace_artifact }}
+            # Derived, not clicked: publication reads this artifact, so a
+            # release always produces one.
+            upload_workspace_artifact: true
             artifact_name_prefix: release-candidate
 
     pending_release_publish_plan:
         name: pending release publish plan
         needs: [detect, plan, guard_real_release, pending_release_pipeline]
-        if: ${{ always() && inputs.dry_run == true && needs.plan.outputs.release_phase == 'pending_release' }}
+        if: ${{ always() && needs.plan.outputs.execution == 'observe' && needs.plan.outputs.release_phase == 'pending_release' }}
         runs-on: ubuntu-latest
 
         steps:
@@ -616,12 +694,12 @@ jobs:
                   {
                     echo "## 🚀 Publish plan"
                     echo ""
-                    echo "- dry run: ${{ inputs.dry_run }}"
+                    echo "- execution: ${{ steps.execution.outputs.execution }} (release_mode: ${{ inputs.release_mode }})"
                     echo "- release inventory: ${{ needs.plan.outputs.release_inventory }}"
                     echo "- pipeline result: ${{ needs.pending_release_pipeline.result }}"
                     echo "- workspace artifact: ${{ needs.pending_release_pipeline.outputs.workspace_artifact_name }}"
                     echo ""
-                    if [ "${{ inputs.dry_run }}" = "true" ]; then
+                    if [ "${{ needs.plan.outputs.execution }}" = "observe" ]; then
                       echo "Dry run: would publish the listed candidates after validation."
                     fi
                   } | tee -a "$GITHUB_STEP_SUMMARY"
@@ -629,7 +707,7 @@ jobs:
     pending_release_publish:
         name: pending release publish
         needs: [detect, plan, guard_real_release, pending_release_pipeline]
-        if: ${{ always() && inputs.dry_run == false && needs.guard_real_release.result == 'success' && needs.plan.outputs.release_phase == 'pending_release' && needs.pending_release_pipeline.result == 'success' && needs.pending_release_pipeline.outputs.artifact_uploaded == 'true' }}
+        if: ${{ always() && needs.plan.outputs.execution == 'release' && needs.guard_real_release.result == 'success' && needs.plan.outputs.release_phase == 'pending_release' && needs.pending_release_pipeline.result == 'success' && needs.pending_release_pipeline.outputs.artifact_uploaded == 'true' }}
         uses: ./.github/workflows/call-apply-workspace-artifact.yml
         secrets:
             GH_PAT: ${{ secrets.GH_PAT }}

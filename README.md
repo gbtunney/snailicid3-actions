@@ -41,6 +41,12 @@ jobs:
       GH_PAT: ${{ secrets.GH_PAT }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     with:
+      release_mode: manual # or `main` for automatic releases from main
+      adapter_ref: v1
+
+  observe:
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-release-observe.yml@v1
+    with:
       adapter_ref: v1
 
   apply:
@@ -66,32 +72,76 @@ workflow-level floor plus a per-job minimum keeps read-only jobs read-only. The
 per-workflow minimums are in [`templates/README.md`](templates/README.md), and
 `bin/check-caller-contract.ts` enforces them on every PR.
 
-### Release-plan phase selection
+### Release caller contract
+
+Two inputs decide everything on the common path.
+
+```yaml
+release_mode: manual | main    # the repository's policy. default: manual
+mode:         observe | release # what one run does. default: derived
+```
+
+- **`release_mode: manual`** — nothing releases on its own. Pushes to `main`
+  observe and report; releases happen through manual dispatch.
+- **`release_mode: main`** — a push to `main` runs the release policy
+  automatically. It is an opt-in policy, not a weakened guard: the real-release
+  guard, the branch restriction and the secret contract are unchanged.
+- **`mode`** names what a single run does, positively. Leave it empty and
+  `release_mode` decides; set it on a dispatch to be explicit.
+
+That gives three obvious behaviours:
+
+| Trigger | Behaviour |
+| --- | --- |
+| Pull request | Observe. `call-release-observe.yml` runs the canonical plan read-only and reports it. It declares `contents: read` and no secrets, so a PR cannot publish. |
+| Push to `main` | `release_mode: manual` → observe. `release_mode: main` → release. |
+| Manual dispatch | Whatever `mode` says, under either policy. This is the escape hatch and always works. |
+
+**A release's prerequisites are derived, not clicked.** Publication reads the
+workspace artifact and depends on the validation pipeline, so `mode: release`
+turns both on itself. Passing `run_pipeline: false` or
+`upload_workspace_artifact: false` alongside it *fails the run* rather than
+producing a release that quietly validates nothing or publishes nothing.
+
+**Deprecated inputs** are accepted for one window so callers pinned to a tag
+published before `mode` existed keep working:
+
+| Old input | Maps to |
+| --- | --- |
+| `dry_run: false` | `mode: release`, with a deprecation warning |
+| `dry_run: true` | no opinion — it is also the default, so it cannot be told apart from unset and never overrides `mode` |
+| `run_pipeline`, `upload_workspace_artifact` | derived; a value that would break a release fails loudly |
+
+`mode: observe` together with `dry_run: false` is a caller contradicting itself
+about the one thing that matters, and fails.
+
+**Advanced inputs** stay available and off the common path: `allow_non_main`,
+`lockfile_mode`, `node_version`, `adapter_ref`.
+
+### Where release truth comes from
 
 Release truth lives in `@snailicid3/workspace`, not here. It owns release
 intent, exact-version registry observation, per-package status and the Markdown
 that reports them, and publishes that as a versioned JSON document.
 `call-release-plan.yml` selects its release phase from that document, and from
-nothing else.
+nothing else — through `call-release-observe.yml`, so the plan a release acts on
+and the report a pull request sees come from one implementation.
 
 The adapter pins `@snailicid3/workspace@0.2.0` and validates `schemaVersion: 1`
 before it reads a single plan field. An unsupported version is rejected
 explicitly rather than guessed at — package SemVer is not a proxy for the schema
-the document declares — and a plan that fails validation stops the run rather
-than degrading to a guess.
+the document declares — and a plan that fails validation stops the run.
 
 `call-detect-release-state.yml` still runs on every release, and still exists as
 a reusable workflow for callers that report release state. It no longer decides
-anything here. It survives inside `call-release-plan.yml` for one reason: it
-owns the pending-changeset filenames `schemaVersion: 1` does not carry, and the
-version branch is still named from them.
+anything: it survives because it owns the pending-changeset filenames
+`schemaVersion: 1` does not carry, and the version branch is named from them.
 
 **Phases name what a ref looks like, never what may be done to it.**
 `pending_release` means "the registry is missing package versions this workspace
-holds", and `should_publish` is `false` for every read-only observation.
-Publishing requires what it always did: an explicit non-dry-run invocation that
-clears the real-release guard. A caller that used `should_publish` to mean
-"there is something to release" wants `release_inventory_count`.
+holds", and `should_publish` is `false` for every read-only observation. A
+caller that wants "there is something to release" wants
+`release_inventory_count`.
 
 Which outputs come from where:
 
@@ -99,6 +149,7 @@ Which outputs come from where:
 | --- | --- |
 | `release_phase`, `should_version`, `should_publish` | canonical plan |
 | `publish_candidates`, `release_inventory_count` | canonical plan |
+| `execution` | resolved from `mode`, `release_mode` and the triggering event |
 | `should_skip` | derived from the selected phase, so it always matches which jobs ran |
 | `changeset_count`, `changeset_slugs`, `primary_changeset_slug` | detector only — `schemaVersion: 1` does not carry changeset filenames |
 | `new_package_count`, `new_version_count` | detector only — the plan records whether an exact `name@version` exists, not whether the name itself is new |
@@ -252,14 +303,18 @@ composite actions, reusable release workflows, scope-commit derivation,
 lockfile policy, caller contracts, template sync/drift/orphan detection, and
 YAML parsing.
 
-The release-plan adapter is covered twice. `pnpm test:adapter` runs offline
+The release-plan adapter is covered three ways. `pnpm test:adapter` runs offline
 against the recorded `#232`/`#233`/`#234` documents and proves that an
 unsupported `schemaVersion` is refused before any field is read, that those
 documents still select the phases those commits produced, and that a missing
-registry version never becomes permission to publish it. `assert_phase_cutover`
-then runs the real `call-release-plan.yml` against this repository's own fixture
-workspace and requires that it reaches `main` and reports
-`should_publish: false`.
+registry version never becomes permission to publish it.
+`pnpm test:release-mode` reads the execution-mode resolver out of
+`call-release-plan.yml` and runs it across sixteen input combinations, so the
+`mode` / `release_mode` / deprecated-input rules cannot pass against logic the
+workflow does not actually run. `assert_phase_cutover` then runs the real
+workflows against this repository's own fixture workspace — the read-only PR
+shape, `mode: observe`, and `release_mode: manual` — and requires that all three
+reach `main` and that none of them authorizes publication.
 
 ### Cross-repository smoke
 

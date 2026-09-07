@@ -57,6 +57,11 @@ jobs:
             - name: Prove the contract checker catches regressions
               run: pnpm test:callers
 
+            # The release execution-mode rules are read out of the workflow
+            # itself, so this cannot pass against logic the workflow does not run.
+            - name: Prove the release execution-mode contract
+              run: pnpm test:release-mode
+
             - name: Check reusable workflows and caller templates
               run: pnpm check:callers
 
@@ -366,6 +371,13 @@ jobs:
             - name: Prove the adapter rejects unsupported schemaVersions and reproduces #232/#233/#234
               run: pnpm test:adapter
 
+    # What a consumer's pull request runs: read-only, secretless, one job.
+    release_observe:
+        name: release plan (observe)
+        uses: ./.github/workflows/call-release-observe.yml
+        with:
+            adapter_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
     release_plan:
         name: release plan
         permissions:
@@ -375,48 +387,95 @@ jobs:
             pull-requests: write
         uses: ./.github/workflows/call-release-plan.yml
         # Mirrors dispatch-release-plan/push-release so the self-test exercises
-        # the same secret shape consumers use, dry run or not.
+        # the same secret shape consumers use.
         secrets:
             GH_PAT: ${{ secrets.GH_PAT }}
             NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         with:
-            dry_run: true
+            mode: observe
+            run_pipeline: false
+            adapter_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    # release_mode: manual must leave today's behaviour alone — a push still
+    # observes rather than releasing.
+    release_plan_manual_policy:
+        name: release plan (release_mode manual)
+        permissions:
+            contents: write
+            actions: write
+            id-token: write
+            pull-requests: write
+        uses: ./.github/workflows/call-release-plan.yml
+        secrets:
+            GH_PAT: ${{ secrets.GH_PAT }}
+            NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        with:
+            release_mode: manual
             run_pipeline: false
             adapter_ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
     assert_phase_cutover:
         name: assert phase selection
-        needs: release_plan
+        needs: [release_plan, release_plan_manual_policy, release_observe]
         runs-on: ubuntu-latest
         steps:
-            - name: Canonical selection must be active and authorize nothing
+            - name: Observation must authorize nothing, under either caller shape
               shell: bash
               env:
                   PHASE: ${{ needs.release_plan.outputs.release_phase }}
+                  EXECUTION: ${{ needs.release_plan.outputs.execution }}
                   SHOULD_PUBLISH: ${{ needs.release_plan.outputs.should_publish }}
                   SHOULD_SKIP: ${{ needs.release_plan.outputs.should_skip }}
                   INVENTORY_COUNT: ${{ needs.release_plan.outputs.release_inventory_count }}
+                  MANUAL_EXECUTION: ${{ needs.release_plan_manual_policy.outputs.execution }}
+                  MANUAL_PHASE: ${{ needs.release_plan_manual_policy.outputs.release_phase }}
+                  OBSERVE_PHASE: ${{ needs.release_observe.outputs.release_phase }}
+                  OBSERVE_PUBLISH: ${{ needs.release_observe.outputs.should_publish }}
+                  OBSERVE_AUTHORIZED: ${{ needs.release_observe.outputs.publish_authorized }}
               run: |
                   set -euo pipefail
 
-                  echo "phase=$PHASE should_publish=$SHOULD_PUBLISH should_skip=$SHOULD_SKIP inventory=$INVENTORY_COUNT"
+                  echo "release_plan:  execution=$EXECUTION phase=$PHASE should_publish=$SHOULD_PUBLISH"
+                  echo "manual policy: execution=$MANUAL_EXECUTION phase=$MANUAL_PHASE"
+                  echo "observe:       phase=$OBSERVE_PHASE should_publish=$OBSERVE_PUBLISH authorized=$OBSERVE_AUTHORIZED"
 
-                  # The fixture workspace holds one private package and no
-                  # changesets, so the canonical plan must reach `main`.
-                  if [[ "$PHASE" != "main" ]]; then
-                    echo "::error::Expected the fixture workspace to select phase 'main' (got '$PHASE')."
+                  # mode: observe must resolve to an observation.
+                  if [[ "$EXECUTION" != "observe" ]]; then
+                    echo "::error::mode 'observe' resolved to execution '$EXECUTION'."
                     exit 1
                   fi
+
+                  # release_mode: manual preserves today's behaviour: nothing releases on its own.
+                  if [[ "$MANUAL_EXECUTION" != "observe" ]]; then
+                    echo "::error::release_mode 'manual' resolved to execution '$MANUAL_EXECUTION'; it must not release on its own."
+                    exit 1
+                  fi
+
+                  # The fixture workspace holds one private package and no
+                  # changesets, so every caller shape must reach `main`.
+                  for pair in "release_plan:$PHASE" "manual:$MANUAL_PHASE" "observe:$OBSERVE_PHASE"; do
+                    name="${pair%%:*}"
+                    value="${pair#*:}"
+                    if [[ "$value" != "main" ]]; then
+                      echo "::error::Expected $name to select phase 'main' (got '$value')."
+                      exit 1
+                    fi
+                  done
 
                   if [[ "$SHOULD_SKIP" != "true" ]]; then
                     echo "::error::Phase 'main' must report should_skip=true (got '$SHOULD_SKIP')."
                     exit 1
                   fi
 
-                  # A read-only observation authorizes nothing, whatever phase it selected.
-                  if [[ "$SHOULD_PUBLISH" != "false" ]]; then
-                    echo "::error::A read-only observation reported should_publish='$SHOULD_PUBLISH'; it must never authorize publication."
-                    exit 1
-                  fi
+                  # Nothing that observes may claim publish authorization —
+                  # including the read-only workflow a pull request runs.
+                  for pair in "release_plan:$SHOULD_PUBLISH" "observe:$OBSERVE_PUBLISH" "observe_authorized:$OBSERVE_AUTHORIZED"; do
+                    name="${pair%%:*}"
+                    value="${pair#*:}"
+                    if [[ "$value" != "false" ]]; then
+                      echo "::error::$name reported '$value'; an observation must never authorize publication."
+                      exit 1
+                    fi
+                  done
 
-                  echo "Canonical selection is active, reached '$PHASE', and authorized nothing."
+                  echo "Observations authorize nothing; release_mode manual does not release; inventory=$INVENTORY_COUNT."
