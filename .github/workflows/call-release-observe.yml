@@ -1,0 +1,162 @@
+name: z Call Release Observe
+
+# ─────────────────────────────────────────────────────────────
+# WORKFLOW: Release Observe
+# TYPE: reusable workflow_call
+# SOURCE: gbtunney/snailicid3-actions
+#
+# Purpose:
+#   Run the canonical @snailicid3/workspace release plan for one ref and
+#   report it. This is the whole of what a pull request should do about
+#   releases: observe, report, authorize nothing.
+#
+# Safety:
+#   - Read-only by construction. `permissions: contents: read`, no secrets
+#     declared, nothing versioned, tagged, committed or published. A workflow
+#     that cannot authenticate to a registry cannot publish by accident.
+#   - Registry absence is inventory. A package version the registry does not
+#     have is reported as held inventory; the plan offers no publish operation
+#     for it and `should_publish` is false for every observation.
+#   - `call-release-plan.yml` runs this same workflow to produce the plan it
+#     selects a phase from, so the report a pull request sees and the document
+#     a release acts on are produced by one implementation.
+# ─────────────────────────────────────────────────────────────
+
+on:
+    workflow_call:
+        inputs:
+            ref:
+                description: >
+                    Git ref, branch, tag, or SHA to observe. Leave empty to observe the triggering commit.
+                required: false
+                type: string
+                default: ''
+
+            adapter_ref:
+                description: >
+                    Ref of gbtunney/snailicid3-actions to take the release-plan adapter from. Consumers should pin
+                    the same tag they call this workflow at.
+                required: false
+                type: string
+                default: main
+
+            node_version:
+                description: Node version used to run the adapter. Prefer a concrete major so setup-node resolves
+                    from the runner toolcache.
+                required: false
+                type: string
+                default: '24'
+
+        outputs:
+            schema_version:
+                description: Release-plan schemaVersion the adapter accepted. Always 1 on success.
+                value: ${{ jobs.observe.outputs.schema_version }}
+
+            release_phase:
+                description: pending_changeset | pending_release | main
+                value: ${{ jobs.observe.outputs.release_phase }}
+
+            release_phase_reason:
+                description: Why the plan selected that phase.
+                value: ${{ jobs.observe.outputs.release_phase_reason }}
+
+            publish_authorized:
+                description: >
+                    Whether the plan offers a publish operation. Always 'false' for an observation — reaching
+                    pending_release reports inventory, not permission.
+                value: ${{ jobs.observe.outputs.publish_authorized }}
+
+            should_version:
+                description: "'true' when release intent is pending."
+                value: ${{ jobs.observe.outputs.should_version }}
+
+            should_publish:
+                description: "'true' only when the plan offers a publish operation, which an observation never does."
+                value: ${{ jobs.observe.outputs.should_publish }}
+
+            release_inventory:
+                description: Space-delimited package@version entries whose exact version is absent from the registry.
+                value: ${{ jobs.observe.outputs.release_inventory }}
+
+            release_inventory_count:
+                description: Number of package versions absent from the registry.
+                value: ${{ jobs.observe.outputs.release_inventory_count }}
+
+permissions:
+    contents: read
+
+jobs:
+    observe:
+        name: canonical release plan
+        runs-on: ubuntu-latest
+
+        outputs:
+            schema_version: ${{ steps.plan.outputs.schema_version }}
+            release_phase: ${{ steps.plan.outputs.release_phase }}
+            release_phase_reason: ${{ steps.plan.outputs.release_phase_reason }}
+            publish_authorized: ${{ steps.plan.outputs.publish_authorized }}
+            should_version: ${{ steps.plan.outputs.should_version }}
+            should_publish: ${{ steps.plan.outputs.should_publish }}
+            release_inventory: ${{ steps.plan.outputs.release_inventory }}
+            release_inventory_count: ${{ steps.plan.outputs.release_inventory_count }}
+
+        steps:
+            # Two checkouts, because the adapter and the repository it observes
+            # are different things. The observed repository is never installed
+            # or built: reading its workspace manifests and asking npm about
+            # exact versions is all an observation needs.
+            - name: Checkout observed ref
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+                  ref: ${{ inputs.ref || github.sha }}
+                  path: observed
+
+            - name: Checkout release-plan adapter
+              uses: actions/checkout@v7
+              with:
+                  repository: gbtunney/snailicid3-actions
+                  ref: ${{ inputs.adapter_ref }}
+                  path: adapter
+
+            # Both checkouts land in subdirectories, so the workspace root holds
+            # no package.json for the action to read a version from.
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+                  package_json_file: adapter/package.json
+
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: ${{ inputs.node_version }}
+
+            - name: Install adapter dependencies
+              working-directory: adapter
+              run: pnpm install --frozen-lockfile --prod
+
+            - name: Produce the canonical release plan
+              id: plan
+              working-directory: adapter
+              run: |
+                  pnpm exec tsx bin/release-plan.ts \
+                    --repo-root "$GITHUB_WORKSPACE/observed" \
+                    --plan-out "$GITHUB_WORKSPACE/release-plan.json" \
+                    --summary "$GITHUB_STEP_SUMMARY" \
+                    --outputs "$GITHUB_OUTPUT"
+
+            # One workflow run can observe more than once — a caller running
+            # this directly and call-release-plan.yml running it again both
+            # produce a plan — and upload-artifact refuses a duplicate name.
+            # The document is diagnostic and identical for the same ref, so
+            # overwriting is the right resolution; failing the observation over
+            # an artifact name would not be.
+            - name: Upload the observed release plan
+              if: ${{ always() }}
+              uses: actions/upload-artifact@v7
+              with:
+                  name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: release-plan.json
+                  if-no-files-found: ignore
+                  overwrite: true

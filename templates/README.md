@@ -76,13 +76,19 @@ file does not exist. Callers outside this repository always use
 | Reusable workflow | Secrets | Consumed by | Permissions a caller must grant |
 | --- | --- | --- | --- |
 | `call-detect-release-state.yml` | — | read-only detection | `contents: read` |
+| `call-release-observe.yml` | — | read-only canonical release plan; what a pull request runs | `contents: read` |
 | `call-pipeline.yml` | — | predictable repository build/test/check/docs routines | `contents: read` |
 | `call-nx-targets.yml` | — | explicit ad-hoc `nx run-many` / `nx affected` target execution | `contents: read` |
 | `call-apply-workspace-artifact.yml` | `GH_PAT`, `NPM_TOKEN` | `GH_PAT`: checkout/push. `NPM_TOKEN`: exported as `NODE_AUTH_TOKEN` for `post_overlay_command` only | `contents: write`, `actions: read`, `id-token: write` |
 | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` | the `dry_run: false` path only — version PR, release tags, `changeset publish` | `contents: write`, `actions: write`, `id-token: write`, `pull-requests: write` |
 
-`call-release-plan.yml` selects its release phase from the canonical
-`@snailicid3/workspace` release plan. Consumers pinning `@v1` should also pass
+`call-release-plan.yml` takes two caller-facing inputs on the common path:
+`release_mode` (`manual` | `main`) is the repository's policy, and `mode`
+(`observe` | `release`) is what one run does. A pull request runs
+`call-release-observe.yml` instead, which is read-only and declares no secrets.
+`dry_run`, `run_pipeline` and `upload_workspace_artifact` are deprecated: they
+map onto the modes, and a value that would break a release fails loudly rather
+than silently no-opping. Consumers pinning `@v1` should also pass
 `adapter_ref: v1` so the adapter comes from the same tag they call.
 
 `call-release-plan.yml` nests the other release workflows. It forwards
@@ -96,7 +102,7 @@ caller's grant is exactly what the innermost workflow can read.
 | `dispatch-release-plan.yml` | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` |
 | `push-release.yml` | `call-release-plan.yml` | `GH_PAT`, `NPM_TOKEN` |
 | `dispatch-workspace-update.yml` | `call-pipeline.yml`, `call-apply-workspace-artifact.yml` | `GH_PAT` |
-| `pr-checks.yml` | `call-detect-release-state.yml`, `call-pipeline.yml` | — |
+| `pr-checks.yml` | `call-release-observe.yml`, `call-pipeline.yml` | — |
 | `push-main.yml` | `call-pipeline.yml` | — |
 | `dispatch-pipeline.yml` | `call-pipeline.yml` | — |
 | `dispatch-nx-targets.yml` | `call-nx-targets.yml` | — |

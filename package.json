@@ -20,6 +20,7 @@
         "release:plan": "tsx bin/release-plan.ts",
         "test:adapter": "tsx bin/workspace-release-plan.test.ts",
         "test:callers": "tsx bin/check-caller-contract.test.ts && tsx bin/check-pr-concurrency.test.ts",
+        "test:release-mode": "tsx bin/check-release-mode.test.ts",
         "typecheck": "tsc --noEmit"
     }
 }
