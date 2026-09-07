@@ -424,3 +424,76 @@ jobs:
         with:
             dry_run: true
             run_pipeline: false
+            adapter_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    # The rollback switch is only a rollback path if it is exercised. This runs
+    # the same workflow with phase_source: detector, which must reach the same
+    # phase through the pre-cutover derivation.
+    release_plan_rollback:
+        name: release plan (detector rollback)
+        permissions:
+            contents: write
+            actions: write
+            id-token: write
+            pull-requests: write
+        uses: ./.github/workflows/call-release-plan.yml
+        secrets:
+            GH_PAT: ${{ secrets.GH_PAT }}
+            NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        with:
+            dry_run: true
+            run_pipeline: false
+            phase_source: detector
+
+    assert_phase_cutover:
+        name: assert phase cutover
+        needs: [release_plan, release_plan_rollback]
+        runs-on: ubuntu-latest
+        steps:
+            - name: Canonical selection must be active, agree with the detector, and authorize nothing
+              shell: bash
+              env:
+                  CANONICAL_PHASE: ${{ needs.release_plan.outputs.release_phase }}
+                  CANONICAL_SOURCE: ${{ needs.release_plan.outputs.phase_source }}
+                  CANONICAL_DETECTOR_PHASE: ${{ needs.release_plan.outputs.detector_release_phase }}
+                  CANONICAL_SHOULD_PUBLISH: ${{ needs.release_plan.outputs.should_publish }}
+                  CANONICAL_INVENTORY_COUNT: ${{ needs.release_plan.outputs.release_inventory_count }}
+                  ROLLBACK_PHASE: ${{ needs.release_plan_rollback.outputs.release_phase }}
+                  ROLLBACK_SOURCE: ${{ needs.release_plan_rollback.outputs.phase_source }}
+              run: |
+                  set -euo pipefail
+
+                  echo "canonical: source=$CANONICAL_SOURCE phase=$CANONICAL_PHASE detector_phase=$CANONICAL_DETECTOR_PHASE"
+                  echo "rollback:  source=$ROLLBACK_SOURCE phase=$ROLLBACK_PHASE"
+
+                  # The cutover actually happened: the default run selects from the canonical plan.
+                  if [[ "$CANONICAL_SOURCE" != "canonical" ]]; then
+                    echo "::error::Expected the default phase source to be canonical (got '$CANONICAL_SOURCE')."
+                    exit 1
+                  fi
+
+                  # The rollback switch actually reaches the detector derivation.
+                  if [[ "$ROLLBACK_SOURCE" != "detector" ]]; then
+                    echo "::error::phase_source: detector did not select the detector derivation (got '$ROLLBACK_SOURCE')."
+                    exit 1
+                  fi
+
+                  # Switching sources must not move the phase on this fixture.
+                  if [[ "$CANONICAL_PHASE" != "$ROLLBACK_PHASE" ]]; then
+                    echo "::error::Canonical selected '$CANONICAL_PHASE' but the rollback path selected '$ROLLBACK_PHASE'."
+                    exit 1
+                  fi
+
+                  if [[ "$CANONICAL_PHASE" != "$CANONICAL_DETECTOR_PHASE" ]]; then
+                    echo "::error::Canonical phase '$CANONICAL_PHASE' disagrees with the reported detector phase '$CANONICAL_DETECTOR_PHASE'."
+                    exit 1
+                  fi
+
+                  # A read-only observation authorizes nothing, whatever phase it selected.
+                  if [[ "$CANONICAL_SHOULD_PUBLISH" != "false" ]]; then
+                    echo "::error::A read-only observation reported should_publish='$CANONICAL_SHOULD_PUBLISH'; it must never authorize publication."
+                    exit 1
+                  fi
+
+                  echo "Cutover holds: canonical is active, the rollback switch works, both reach '$CANONICAL_PHASE',"
+                  echo "and the plan authorized nothing (release_inventory_count=$CANONICAL_INVENTORY_COUNT)."

@@ -95,6 +95,24 @@ on:
                 default: '24'
                 type: string
 
+            phase_source:
+                description: >
+                    Where release phase selection comes from. 'canonical' reads the versioned
+                    @snailicid3/workspace release plan; 'detector' restores the previous
+                    call-detect-release-state.yml derivation. This is the rollback switch: set it to
+                    'detector' to return to detector-driven selection without reverting the adapter.
+                required: false
+                default: canonical
+                type: string
+
+            adapter_ref:
+                description: >
+                    Ref of gbtunney/snailicid3-actions to take the release-plan adapter from. Consumers should pin
+                    the same tag they call this workflow at. Only read when phase_source is 'canonical'.
+                required: false
+                default: main
+                type: string
+
         outputs:
             checked_ref:
                 description: Resolved commit SHA inspected by release-state detection.
@@ -104,21 +122,42 @@ on:
                 description: pending_changeset | pending_release | main
                 value: ${{ jobs.plan.outputs.release_phase }}
 
+            phase_source:
+                description: Which derivation actually selected the phase — canonical | detector.
+                value: ${{ jobs.plan.outputs.phase_source }}
+
+            detector_release_phase:
+                description: >
+                    The phase the detector's own outputs imply, reported alongside the active selection so the two
+                    can be compared on every run.
+                value: ${{ jobs.plan.outputs.detector_release_phase }}
+
             should_version:
-                description: "'true' when pending changesets exist."
-                value: ${{ jobs.detect.outputs.should_version }}
+                description: "'true' when release intent is pending."
+                value: ${{ jobs.plan.outputs.should_version }}
 
             should_publish:
-                description: "'true' when no changesets remain and publish candidates exist."
-                value: ${{ jobs.detect.outputs.should_publish }}
+                description: >
+                    "'true' only when the release plan actually offers a publish operation. Under canonical selection
+                    this is always 'false' for a read-only observation: a package version missing from the registry is
+                    inventory, not authorization. Callers that used this to mean 'there is something to release' want
+                    release_inventory_count instead."
+                value: ${{ jobs.plan.outputs.should_publish }}
 
             should_skip:
                 description: "'true' when no release action is needed."
-                value: ${{ jobs.detect.outputs.should_skip }}
+                value: ${{ jobs.plan.outputs.should_skip }}
 
             publish_candidates:
-                description: Space-delimited package@version publish candidates.
-                value: ${{ jobs.detect.outputs.publish_candidates }}
+                description: >
+                    Space-delimited package@version entries whose exact version is absent from the registry. Retained
+                    under its original name for existing callers; it is inventory, and publishing it still requires an
+                    explicit non-dry-run invocation that clears the real-release guard.
+                value: ${{ jobs.plan.outputs.release_inventory }}
+
+            release_inventory_count:
+                description: Number of package versions absent from the registry.
+                value: ${{ jobs.plan.outputs.release_inventory_count }}
 
             workspace_artifact_name:
                 description: Workspace snapshot artifact name, when the pipeline ran and uploaded one.
@@ -137,13 +176,119 @@ jobs:
         with:
             ref: ${{ inputs.ref }}
 
+    # The canonical plan is now the active source of phase selection. It runs
+    # beside the detector rather than after it: the detector is still needed for
+    # the changeset filenames schemaVersion 1 does not carry, and is the
+    # rollback path.
+    #
+    # Nothing here is continue-on-error. schemaVersion validation is the hard
+    # boundary, so an unreadable or unsupported plan stops the release rather
+    # than falling back silently — falling back automatically would make the
+    # rollback switch a lie about which derivation ran.
+    canonical_plan:
+        name: canonical release plan
+        needs: detect
+        if: ${{ inputs.phase_source == 'canonical' }}
+        runs-on: ubuntu-latest
+
+        outputs:
+            schema_version: ${{ steps.plan.outputs.schema_version }}
+            release_phase: ${{ steps.plan.outputs.release_phase }}
+            release_phase_reason: ${{ steps.plan.outputs.release_phase_reason }}
+            publish_authorized: ${{ steps.plan.outputs.publish_authorized }}
+            should_version: ${{ steps.plan.outputs.should_version }}
+            should_publish: ${{ steps.plan.outputs.should_publish }}
+            should_skip: ${{ steps.plan.outputs.should_skip }}
+            release_inventory: ${{ steps.plan.outputs.release_inventory }}
+            release_inventory_count: ${{ steps.plan.outputs.release_inventory_count }}
+
+        steps:
+            # Same two-checkout layout as call-compare-release-plan.yml: the
+            # adapter and the repository it observes are different things, and
+            # the observed repository is never installed or built.
+            - name: Checkout observed ref
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+                  ref: ${{ inputs.ref || github.sha }}
+                  path: observed
+
+            - name: Checkout release-plan adapter
+              uses: actions/checkout@v7
+              with:
+                  repository: gbtunney/snailicid3-actions
+                  ref: ${{ inputs.adapter_ref }}
+                  path: adapter
+
+            # Both checkouts land in subdirectories, so the workspace root holds
+            # no package.json for the action to read a version from.
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+                  package_json_file: adapter/package.json
+
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: ${{ inputs.node_version }}
+
+            - name: Install adapter dependencies
+              working-directory: adapter
+              run: pnpm install --frozen-lockfile --prod
+
+            # The detector's outputs are handed to the adapter so the plan's own
+            # job summary carries the live dual run, not just the phase the
+            # workflow went on to use.
+            - name: Collect detector outputs
+              shell: bash
+              env:
+                  DETECTOR_OUTPUTS: ${{ toJSON(needs.detect.outputs) }}
+              run: |
+                  set -euo pipefail
+                  printf '%s\n' "$DETECTOR_OUTPUTS" > "$GITHUB_WORKSPACE/detector-outputs.json"
+
+            - name: Produce the canonical release plan
+              id: plan
+              working-directory: adapter
+              run: |
+                  pnpm exec tsx bin/compare-release-plan.ts \
+                    --repo-root "$GITHUB_WORKSPACE/observed" \
+                    --detector "$GITHUB_WORKSPACE/detector-outputs.json" \
+                    --plan-out "$GITHUB_WORKSPACE/release-plan.json" \
+                    --summary "$GITHUB_STEP_SUMMARY" \
+                    --outputs "$GITHUB_OUTPUT"
+
+            # Distinct from call-compare-release-plan.yml's artifact: the two
+            # workflows run in the same self-test run, and upload-artifact
+            # refuses a duplicate name.
+            - name: Upload the selected release plan
+              if: ${{ always() }}
+              uses: actions/upload-artifact@v7
+              with:
+                  name: release-plan-selected-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: release-plan.json
+                  if-no-files-found: ignore
+
     plan:
         name: release plan
-        needs: detect
+        needs: [detect, canonical_plan]
+        # canonical_plan is skipped on the rollback path, so this job must not
+        # inherit that skip. It still fails if canonical_plan failed while
+        # canonical selection was requested — see the guard in "Decide release
+        # phase" below.
+        if: ${{ always() && needs.detect.result == 'success' }}
         runs-on: ubuntu-latest
 
         outputs:
             release_phase: ${{ steps.phase.outputs.release_phase }}
+            phase_source: ${{ steps.phase.outputs.phase_source }}
+            detector_release_phase: ${{ steps.phase.outputs.detector_release_phase }}
+            should_version: ${{ steps.phase.outputs.should_version }}
+            should_publish: ${{ steps.phase.outputs.should_publish }}
+            should_skip: ${{ steps.phase.outputs.should_skip }}
+            release_inventory: ${{ steps.phase.outputs.release_inventory }}
+            release_inventory_count: ${{ steps.phase.outputs.release_inventory_count }}
 
         steps:
             - name: Validate lockfile mode
@@ -155,21 +300,118 @@ jobs:
                     *) echo "::error::Invalid lockfile_mode: ${{ inputs.lockfile_mode }}. Expected frozen or reconcile."; exit 1 ;;
                   esac
 
-            - name: Decide release phase
-              id: phase
+            - name: Validate phase source
               shell: bash
               run: |
                   set -euo pipefail
+                  case "${{ inputs.phase_source }}" in
+                    canonical|detector) ;;
+                    *) echo "::error::Invalid phase_source: ${{ inputs.phase_source }}. Expected canonical or detector."; exit 1 ;;
+                  esac
 
-                  if [ "${{ needs.detect.outputs.should_version }}" = "true" ]; then
-                    release_phase="pending_changeset"
-                  elif [ "${{ needs.detect.outputs.should_publish }}" = "true" ]; then
-                    release_phase="pending_release"
+            - name: Decide release phase
+              id: phase
+              shell: bash
+              env:
+                  PHASE_SOURCE: ${{ inputs.phase_source }}
+                  CANONICAL_RESULT: ${{ needs.canonical_plan.result }}
+                  CANONICAL_PHASE: ${{ needs.canonical_plan.outputs.release_phase }}
+                  CANONICAL_SCHEMA_VERSION: ${{ needs.canonical_plan.outputs.schema_version }}
+                  CANONICAL_SHOULD_VERSION: ${{ needs.canonical_plan.outputs.should_version }}
+                  CANONICAL_SHOULD_PUBLISH: ${{ needs.canonical_plan.outputs.should_publish }}
+                  CANONICAL_SHOULD_SKIP: ${{ needs.canonical_plan.outputs.should_skip }}
+                  CANONICAL_INVENTORY: ${{ needs.canonical_plan.outputs.release_inventory }}
+                  CANONICAL_INVENTORY_COUNT: ${{ needs.canonical_plan.outputs.release_inventory_count }}
+                  DETECTOR_SHOULD_VERSION: ${{ needs.detect.outputs.should_version }}
+                  DETECTOR_SHOULD_PUBLISH: ${{ needs.detect.outputs.should_publish }}
+                  DETECTOR_SHOULD_SKIP: ${{ needs.detect.outputs.should_skip }}
+                  DETECTOR_CANDIDATES: ${{ needs.detect.outputs.publish_candidates }}
+                  DETECTOR_CANDIDATE_COUNT: ${{ needs.detect.outputs.publish_candidate_count }}
+              run: |
+                  set -euo pipefail
+
+                  # The detector's own result, always computed so both
+                  # derivations can be reported side by side on every run. This
+                  # is also the rollback derivation, unchanged from before the
+                  # cutover.
+                  if [ "$DETECTOR_SHOULD_VERSION" = "true" ]; then
+                    detector_release_phase="pending_changeset"
+                  elif [ "$DETECTOR_SHOULD_PUBLISH" = "true" ]; then
+                    detector_release_phase="pending_release"
                   else
-                    release_phase="main"
+                    detector_release_phase="main"
                   fi
 
-                  echo "release_phase=$release_phase" >> "$GITHUB_OUTPUT"
+                  if [ "$PHASE_SOURCE" = "canonical" ]; then
+                    if [ "$CANONICAL_RESULT" != "success" ]; then
+                      echo "::error::Canonical phase selection was requested but the release plan did not complete (result: $CANONICAL_RESULT)."
+                      echo "::error::Re-run with phase_source: detector to fall back to the previous detector-driven selection."
+                      exit 1
+                    fi
+
+                    # schemaVersion is the hard boundary. The adapter already
+                    # refuses an unsupported document; this re-check makes the
+                    # workflow's own dependence on schemaVersion 1 explicit
+                    # rather than implied by the adapter's exit code.
+                    if [ "$CANONICAL_SCHEMA_VERSION" != "1" ]; then
+                      echo "::error::Unsupported release-plan schemaVersion '$CANONICAL_SCHEMA_VERSION'; this workflow supports 1 only."
+                      echo "::error::Re-run with phase_source: detector to fall back to the previous detector-driven selection."
+                      exit 1
+                    fi
+
+                    release_phase="$CANONICAL_PHASE"
+                    should_version="$CANONICAL_SHOULD_VERSION"
+                    should_publish="$CANONICAL_SHOULD_PUBLISH"
+                    release_inventory="$CANONICAL_INVENTORY"
+                    release_inventory_count="$CANONICAL_INVENTORY_COUNT"
+                  else
+                    echo "::warning::phase_source=detector — release phase selection has been rolled back to the pre-cutover detector derivation."
+                    release_phase="$detector_release_phase"
+                    should_version="$DETECTOR_SHOULD_VERSION"
+                    should_publish="$DETECTOR_SHOULD_PUBLISH"
+                    release_inventory="$DETECTOR_CANDIDATES"
+                    release_inventory_count="$DETECTOR_CANDIDATE_COUNT"
+                  fi
+
+                  # should_skip describes what this workflow does, so it follows
+                  # the selected phase rather than the source's own field. Under
+                  # canonical selection those disagree: an observation holding
+                  # uninventoried versions reports should_publish=false, and
+                  # passing its should_skip through would claim "nothing to do"
+                  # on a run that is about to take the pending_release path. The
+                  # detector's own value already equals this.
+                  if [ "$release_phase" = "main" ]; then
+                    should_skip=true
+                  else
+                    should_skip=false
+                  fi
+
+                  {
+                    echo "release_phase=$release_phase"
+                    echo "phase_source=$PHASE_SOURCE"
+                    echo "detector_release_phase=$detector_release_phase"
+                    echo "should_version=$should_version"
+                    echo "should_publish=$should_publish"
+                    echo "should_skip=$should_skip"
+                    echo "release_inventory=$release_inventory"
+                    echo "release_inventory_count=$release_inventory_count"
+                  } >> "$GITHUB_OUTPUT"
+
+                  {
+                    echo "## Release phase selection"
+                    echo ""
+                    echo "| | Phase | should_version | should_publish | inventory |"
+                    echo "|---|---|---|---|---|"
+                    echo "| canonical | \`${CANONICAL_PHASE:-n/a}\` | \`${CANONICAL_SHOULD_VERSION:-n/a}\` | \`${CANONICAL_SHOULD_PUBLISH:-n/a}\` | \`${CANONICAL_INVENTORY_COUNT:-n/a}\` |"
+                    echo "| detector | \`$detector_release_phase\` | \`$DETECTOR_SHOULD_VERSION\` | \`$DETECTOR_SHOULD_PUBLISH\` | \`$DETECTOR_CANDIDATE_COUNT\` |"
+                    echo ""
+                    echo "Active source: \`$PHASE_SOURCE\` → phase \`$release_phase\`."
+                    echo ""
+                    if [ "$release_phase" = "pending_release" ]; then
+                      echo "\`pending_release\` reports inventory, not authorization. Publication still requires an"
+                      echo "explicit non-dry-run invocation that clears the real-release guard."
+                    fi
+                  } >> "$GITHUB_STEP_SUMMARY"
 
             - name: Print release plan
               shell: bash
@@ -186,42 +428,46 @@ jobs:
                     echo "- checked ref: ${{ needs.detect.outputs.checked_ref }}"
                     echo "- dry run: ${{ inputs.dry_run }}"
                     echo "- allow non-main: ${{ inputs.allow_non_main }}"
-                    echo "- phase: $phase"
+                    echo "- phase: $phase (source: ${{ inputs.phase_source }})"
                     echo ""
-                    echo "## 📦 Release-state outputs"
+                    echo "## 📦 Selected release state"
+                    echo ""
+                    echo "Populated from the active phase source."
+                    echo ""
+                    echo "- should_version: ${{ steps.phase.outputs.should_version }}"
+                    echo "- should_publish: ${{ steps.phase.outputs.should_publish }}"
+                    echo "- should_skip: ${{ steps.phase.outputs.should_skip }}"
+                    echo "- release_inventory_count: ${{ steps.phase.outputs.release_inventory_count }}"
+                    echo "- release_inventory: ${{ steps.phase.outputs.release_inventory }}"
+                    echo ""
+                    echo "## 🧾 Detector-only state"
+                    echo ""
+                    echo "Fields the release-plan schemaVersion 1 does not carry. These stay detector-derived."
                     echo ""
                     echo "- changeset_count: ${{ needs.detect.outputs.changeset_count }}"
                     echo "- changeset_slugs: ${{ needs.detect.outputs.changeset_slugs }}"
                     echo "- primary_changeset_slug: ${{ needs.detect.outputs.primary_changeset_slug }}"
-                    echo "- has_pending_changesets: ${{ needs.detect.outputs.has_pending_changesets }}"
-                    echo "- package_count: ${{ needs.detect.outputs.package_count }}"
-                    echo "- public_package_count: ${{ needs.detect.outputs.public_package_count }}"
-                    echo "- private_package_count: ${{ needs.detect.outputs.private_package_count }}"
-                    echo "- invalid_package_count: ${{ needs.detect.outputs.invalid_package_count }}"
                     echo "- new_package_count: ${{ needs.detect.outputs.new_package_count }}"
                     echo "- new_version_count: ${{ needs.detect.outputs.new_version_count }}"
-                    echo "- already_published_count: ${{ needs.detect.outputs.already_published_count }}"
-                    echo "- lookup_failed_count: ${{ needs.detect.outputs.lookup_failed_count }}"
-                    echo "- publish_candidate_count: ${{ needs.detect.outputs.publish_candidate_count }}"
-                    echo "- publish_candidates: ${{ needs.detect.outputs.publish_candidates }}"
                     echo ""
                     echo "## ✅ Planned action"
                     echo ""
 
                     if [ "$phase" = "pending_changeset" ]; then
-                      echo "This ref has pending changesets."
+                      echo "This ref has pending release intent."
                       if [ "$dry_run" = "true" ]; then
                         echo "Dry run: would create or update a Changesets version PR."
                       else
                         echo "Real mode: would create or update a Changesets version PR."
                       fi
                     elif [ "$phase" = "pending_release" ]; then
-                      echo "This ref has publish candidates and no pending changesets."
+                      echo "This ref holds package versions the registry does not have, and no pending release intent."
+                      echo "That is inventory, not authorization to publish it."
                       if [ "$dry_run" = "true" ]; then
-                        echo "Dry run: would validate and prepare publish candidate artifacts."
-                        echo "Dry run: would publish: ${{ needs.detect.outputs.publish_candidates }}."
+                        echo "Dry run: would validate and prepare release candidate artifacts."
+                        echo "Dry run: inventory is ${{ steps.phase.outputs.release_inventory }}."
                       else
-                        echo "Real mode: would validate and publish: ${{ needs.detect.outputs.publish_candidates }}."
+                        echo "Real mode: would validate and publish: ${{ steps.phase.outputs.release_inventory }}."
                       fi
                     else
                       echo "No release action is needed."
@@ -260,7 +506,7 @@ jobs:
     pending_changeset:
         name: pending changeset version PR
         needs: [detect, plan, guard_real_release]
-        if: ${{ always() && needs.detect.outputs.should_version == 'true' && (inputs.dry_run == true || needs.guard_real_release.result == 'success') }}
+        if: ${{ always() && needs.plan.outputs.release_phase == 'pending_changeset' && (inputs.dry_run == true || needs.guard_real_release.result == 'success') }}
         runs-on: ubuntu-latest
         env:
             HUSKY: 0
@@ -439,7 +685,7 @@ jobs:
     pending_release_pipeline:
         name: pending release candidate pipeline
         needs: [detect, plan, guard_real_release]
-        if: ${{ always() && inputs.run_pipeline == true && needs.detect.outputs.should_publish == 'true' && (inputs.dry_run == true || needs.guard_real_release.result == 'success') }}
+        if: ${{ always() && inputs.run_pipeline == true && needs.plan.outputs.release_phase == 'pending_release' && (inputs.dry_run == true || needs.guard_real_release.result == 'success') }}
         uses: ./.github/workflows/call-pipeline.yml
         with:
             mode: abort_on_error
@@ -457,7 +703,7 @@ jobs:
     pending_release_publish_plan:
         name: pending release publish plan
         needs: [detect, plan, guard_real_release, pending_release_pipeline]
-        if: ${{ always() && inputs.dry_run == true && needs.detect.outputs.should_publish == 'true' }}
+        if: ${{ always() && inputs.dry_run == true && needs.plan.outputs.release_phase == 'pending_release' }}
         runs-on: ubuntu-latest
 
         steps:
@@ -469,7 +715,7 @@ jobs:
                     echo "## 🚀 Publish plan"
                     echo ""
                     echo "- dry run: ${{ inputs.dry_run }}"
-                    echo "- publish candidates: ${{ needs.detect.outputs.publish_candidates }}"
+                    echo "- release inventory: ${{ needs.plan.outputs.release_inventory }}"
                     echo "- pipeline result: ${{ needs.pending_release_pipeline.result }}"
                     echo "- workspace artifact: ${{ needs.pending_release_pipeline.outputs.workspace_artifact_name }}"
                     echo ""
@@ -481,7 +727,7 @@ jobs:
     pending_release_publish:
         name: pending release publish
         needs: [detect, plan, guard_real_release, pending_release_pipeline]
-        if: ${{ always() && inputs.dry_run == false && needs.guard_real_release.result == 'success' && needs.detect.outputs.should_publish == 'true' && needs.pending_release_pipeline.result == 'success' && needs.pending_release_pipeline.outputs.artifact_uploaded == 'true' }}
+        if: ${{ always() && inputs.dry_run == false && needs.guard_real_release.result == 'success' && needs.plan.outputs.release_phase == 'pending_release' && needs.pending_release_pipeline.result == 'success' && needs.pending_release_pipeline.outputs.artifact_uploaded == 'true' }}
         uses: ./.github/workflows/call-apply-workspace-artifact.yml
         secrets:
             GH_PAT: ${{ secrets.GH_PAT }}
@@ -499,7 +745,7 @@ jobs:
                 npm whoami
                 pnpm changeset publish
 
-                publish_candidates="${{ needs.detect.outputs.publish_candidates }}"
+                publish_candidates="${{ needs.plan.outputs.release_inventory }}"
 
                 if [[ -z "$publish_candidates" ]]; then
                   echo "No publish candidates detected after publish; skipping GitHub Release creation."
@@ -535,7 +781,14 @@ jobs:
     main:
         name: no release action
         needs: [detect, plan]
-        if: ${{ needs.detect.outputs.should_skip == 'true' }}
+        # always() is load-bearing, not decorative. `plan` depends on
+        # canonical_plan, which is skipped whenever phase_source is detector,
+        # and a skipped dependency propagates through the needs chain to any
+        # dependent job that does not opt out. Without always() this job is
+        # skipped on the rollback path even though the phase is main — which is
+        # exactly what happened on the first run of this change. Every other
+        # phase-gated job in this workflow already carries the same guard.
+        if: ${{ always() && needs.plan.outputs.release_phase == 'main' }}
         runs-on: ubuntu-latest
 
         steps:
@@ -558,13 +811,16 @@ jobs:
                   changeset_result="${{ needs.pending_changeset.result }}"
                   publish_result="${{ needs.pending_release_publish.result }}"
                   main_result="${{ needs.main.result }}"
+                  inconsistent=false
 
                   {
                     echo "## 🎯 Release outcome"
                     echo ""
-                    echo "- phase: $phase"
-                    echo "- should_version: ${{ needs.detect.outputs.should_version }}"
-                    echo "- should_publish: ${{ needs.detect.outputs.should_publish }}"
+                    echo "- phase: $phase (source: ${{ needs.plan.outputs.phase_source }})"
+                    echo "- detector phase: ${{ needs.plan.outputs.detector_release_phase }}"
+                    echo "- should_version: ${{ needs.plan.outputs.should_version }}"
+                    echo "- should_publish: ${{ needs.plan.outputs.should_publish }}"
+                    echo "- release_inventory_count: ${{ needs.plan.outputs.release_inventory_count }}"
                     echo ""
 
                     if [ "$phase" = "pending_changeset" ]; then
@@ -587,3 +843,21 @@ jobs:
                       fi
                     fi
                   } >> "$GITHUB_STEP_SUMMARY"
+
+                  # The no-action job has no dry-run or guard preconditions, so
+                  # selecting `main` and not running it means the selected phase
+                  # and the path that actually ran disagree. That is a workflow
+                  # defect rather than a release-state result, and reporting it
+                  # as a summary line let a real regression through a green run.
+                  if [ "$phase" = "main" ] \
+                    && [ "$main_result" != "success" ] \
+                    && [ "$main_result" != "cancelled" ]; then
+                    inconsistent=true
+                    echo "::error::Phase 'main' was selected but the no-release-action job did not run (result: $main_result)."
+                  fi
+
+                  if [ "$inconsistent" = "true" ]; then
+                    echo "" >> "$GITHUB_STEP_SUMMARY"
+                    echo "❌ **Workflow defect:** the selected phase and the path that ran disagree." >> "$GITHUB_STEP_SUMMARY"
+                    exit 1
+                  fi

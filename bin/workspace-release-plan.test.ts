@@ -9,12 +9,16 @@
 
 import {
     compareReleaseState,
+    deriveDetectorPhase,
     type LegacyReleaseStateOutputs,
     type LegacyReleaseStateRecord,
     mapReleasePlanToLegacyOutputs,
+    type ReleasePhase,
     readReleasePlanDocument,
     RELEASE_STATE_FIELD_RULES,
     renderComparisonMarkdown,
+    renderPhaseSelectionMarkdown,
+    selectReleasePhase,
 } from './workspace-release-plan.js'
 import {
     readLegacyReleaseStateFixture,
@@ -218,6 +222,107 @@ for (const name of ['pull-request-232', 'pull-request-234'] as const) {
                 'should_skip',
             ]),
         `differed on: ${disagreeing.join(', ')}`,
+    )
+}
+
+// ── phase selection (the cutover) ────────────────────────────────────────────
+
+/** The phase each historical case must select, and what the detector selected for the same commit. */
+const phases: Record<ReleaseStateFixtureName, ReleasePhase> = {
+    'pull-request-232': 'pending_release',
+    'pull-request-233': 'pending_changeset',
+    'pull-request-234': 'pending_release',
+}
+
+for (const name of releaseStateFixtureNames) {
+    const mapped = mapReleasePlanToLegacyOutputs(planOf(name))
+    const selection = selectReleasePhase(mapped)
+    const legacy = legacyOf(name)
+
+    check(
+        `${name}: canonical selection is ${phases[name]}`,
+        selection.phase === phases[name],
+        `got ${selection.phase} (${selection.reason})`,
+    )
+
+    // The cutover must not move the phase. If it did, switching the source would silently change which jobs run.
+    check(
+        `${name}: canonical and detector select the same phase`,
+        selection.phase === deriveDetectorPhase(legacy),
+        `canonical ${selection.phase} vs detector ${deriveDetectorPhase(legacy)}`,
+    )
+
+    // The property the whole cutover turns on: reaching pending_release grants nothing.
+    check(
+        `${name}: the plan authorizes no publication whatever phase is selected`,
+        !selection.publishAuthorized,
+    )
+}
+
+for (const name of ['pull-request-232', 'pull-request-234'] as const) {
+    const mapped = mapReleasePlanToLegacyOutputs(planOf(name))
+    const selection = selectReleasePhase(mapped)
+
+    // #232 and #234 are the cases where exact versions are missing from the registry. Selecting pending_release from
+    // that inventory must not turn into permission to publish it.
+    check(
+        `${name}: missing registry versions are inventory, not authorization`,
+        selection.phase === 'pending_release' &&
+            mapped.pending_inventory_count > 0 &&
+            !selection.publishAuthorized &&
+            !mapped.should_publish &&
+            mapped.publish_candidate_count === 0 &&
+            mapped.publish_candidates === '',
+        JSON.stringify({
+            pending_inventory_count: mapped.pending_inventory_count,
+            phase: selection.phase,
+            publish_candidate_count: mapped.publish_candidate_count,
+            publishAuthorized: selection.publishAuthorized,
+        }),
+    )
+
+    // The inventory the manual release path tags and publishes must still be the detector's exact candidate list, or
+    // the cutover would quietly change what a real release operates on.
+    check(
+        `${name}: canonical inventory matches the detector's candidate list exactly`,
+        mapped.pending_inventory === legacyOf(name).publish_candidates,
+        `plan "${mapped.pending_inventory}" vs detector "${String(legacyOf(name).publish_candidates)}"`,
+    )
+}
+
+for (const name of releaseStateFixtureNames) {
+    const plan = planOf(name)
+    const mapped = mapReleasePlanToLegacyOutputs(plan)
+
+    // pending_inventory_count drives phase selection, so prove it stays the same set the plan's own statuses describe
+    // rather than drifting into a second notion of "pending".
+    check(
+        `${name}: pending inventory equals the plan's own pending statuses`,
+        mapped.pending_inventory_count ===
+            plan.summary.eligible + plan.summary.held + plan.summary.blocked,
+        `${mapped.pending_inventory_count} vs ${plan.summary.eligible + plan.summary.held + plan.summary.blocked}`,
+    )
+}
+
+{
+    // A detector that reported nothing must not be silently read as "main".
+    check(
+        'a missing detector result is reported as unknown rather than main',
+        deriveDetectorPhase({}) === 'unknown',
+    )
+
+    const markdown = renderPhaseSelectionMarkdown(
+        selectReleasePhase(mapReleasePlanToLegacyOutputs(planOf('pull-request-234'))),
+        'pending_release',
+    )
+
+    check(
+        'the phase report states both phases and withholds authorization',
+        markdown.includes('**Canonical phase:** `pending_release`') &&
+            markdown.includes('**Detector phase:** `pending_release`') &&
+            markdown.includes('**Publish authorized by the plan:** `false`') &&
+            markdown.includes('not permission to publish'),
+        markdown,
     )
 }
 
