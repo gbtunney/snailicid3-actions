@@ -14,21 +14,21 @@ permissions:
 
 jobs:
   pipeline:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v2
     with:
       build_mode: abort_on_error
       test_mode: abort_on_error
       docs_mode: skip
 
   nx_targets:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-nx-targets.yml@v1
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-nx-targets.yml@v2
     with:
       scope: affected
       targets: lint test build
       mode: report
 
   detect:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@v1
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-detect-release-state.yml@v2
 
   release:
     permissions:
@@ -36,25 +36,25 @@ jobs:
       actions: write
       id-token: write
       pull-requests: write
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v2
     secrets:
       GH_PAT: ${{ secrets.GH_PAT }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     with:
       release_mode: manual # or `main` for automatic releases from main
-      adapter_ref: v1
+      adapter_ref: v2
 
   observe:
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-release-observe.yml@v1
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-release-observe.yml@v2
     with:
-      adapter_ref: v1
+      adapter_ref: v2
 
   apply:
     permissions:
       contents: write
       actions: read
       id-token: write
-    uses: gbtunney/snailicid3-actions/.github/workflows/call-apply-workspace-artifact.yml@v1
+    uses: gbtunney/snailicid3-actions/.github/workflows/call-apply-workspace-artifact.yml@v2
     secrets:
       GH_PAT: ${{ secrets.GH_PAT }}
     with:
@@ -77,8 +77,8 @@ per-workflow minimums are in [`templates/README.md`](templates/README.md), and
 Two inputs decide everything on the common path.
 
 ```yaml
-release_mode: manual | main    # the repository's policy. default: manual
-mode:         observe | release # what one run does. default: derived
+release_mode: manual | main # the repository's policy. default: manual
+mode: observe | release # what one run does. default: derived
 ```
 
 - **`release_mode: manual`** — nothing releases on its own. Pushes to `main`
@@ -91,26 +91,26 @@ mode:         observe | release # what one run does. default: derived
 
 That gives three obvious behaviours:
 
-| Trigger | Behaviour |
-| --- | --- |
-| Pull request | Observe. `call-release-observe.yml` runs the canonical plan read-only and reports it. It declares `contents: read` and no secrets, so a PR cannot publish. |
-| Push to `main` | `release_mode: manual` → observe. `release_mode: main` → release. |
-| Manual dispatch | Whatever `mode` says, under either policy. This is the escape hatch and always works. |
+| Trigger         | Behaviour                                                                                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pull request    | Observe. `call-release-observe.yml` runs the canonical plan read-only and reports it. It declares `contents: read` and no secrets, so a PR cannot publish. |
+| Push to `main`  | `release_mode: manual` → observe. `release_mode: main` → release.                                                                                          |
+| Manual dispatch | Whatever `mode` says, under either policy. This is the escape hatch and always works.                                                                      |
 
 **A release's prerequisites are derived, not clicked.** Publication reads the
 workspace artifact and depends on the validation pipeline, so `mode: release`
 turns both on itself. Passing `run_pipeline: false` or
-`upload_workspace_artifact: false` alongside it *fails the run* rather than
+`upload_workspace_artifact: false` alongside it _fails the run_ rather than
 producing a release that quietly validates nothing or publishes nothing.
 
 **Deprecated inputs** are accepted for one window so callers pinned to a tag
 published before `mode` existed keep working:
 
-| Old input | Maps to |
-| --- | --- |
-| `dry_run: false` | `mode: release`, with a deprecation warning |
-| `dry_run: true` | no opinion — it is also the default, so it cannot be told apart from unset and never overrides `mode` |
-| `run_pipeline`, `upload_workspace_artifact` | derived; a value that would break a release fails loudly |
+| Old input                                   | Maps to                                                                                               |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `dry_run: false`                            | `mode: release`, with a deprecation warning                                                           |
+| `dry_run: true`                             | no opinion — it is also the default, so it cannot be told apart from unset and never overrides `mode` |
+| `run_pipeline`, `upload_workspace_artifact` | derived; a value that would break a release fails loudly                                              |
 
 `mode: observe` together with `dry_run: false` is a caller contradicting itself
 about the one thing that matters, and fails.
@@ -145,14 +145,14 @@ caller that wants "there is something to release" wants
 
 Which outputs come from where:
 
-| Output | Source |
-| --- | --- |
-| `release_phase`, `should_version`, `should_publish` | canonical plan |
-| `publish_candidates`, `release_inventory_count` | canonical plan |
-| `execution` | resolved from `mode`, `release_mode` and the triggering event |
-| `should_skip` | derived from the selected phase, so it always matches which jobs ran |
-| `changeset_count`, `changeset_slugs`, `primary_changeset_slug` | detector only — `schemaVersion: 1` does not carry changeset filenames |
-| `new_package_count`, `new_version_count` | detector only — the plan records whether an exact `name@version` exists, not whether the name itself is new |
+| Output                                                         | Source                                                                                                      |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `release_phase`, `should_version`, `should_publish`            | canonical plan                                                                                              |
+| `publish_candidates`, `release_inventory_count`                | canonical plan                                                                                              |
+| `execution`                                                    | resolved from `mode`, `release_mode` and the triggering event                                               |
+| `should_skip`                                                  | derived from the selected phase, so it always matches which jobs ran                                        |
+| `changeset_count`, `changeset_slugs`, `primary_changeset_slug` | detector only — `schemaVersion: 1` does not carry changeset filenames                                       |
+| `new_package_count`, `new_version_count`                       | detector only — the plan records whether an exact `name@version` exists, not whether the name itself is new |
 
 Fields the schema does not carry stay explicitly detector-derived rather than
 approximated from the plan.
@@ -189,12 +189,12 @@ intent or publish selection.
 
 ```yaml
 steps:
-  - uses: gbtunney/snailicid3-actions/.github/actions/report-repository@v1
-  - uses: gbtunney/snailicid3-actions/.github/actions/report-environment@v1
-  - uses: gbtunney/snailicid3-actions/.github/actions/report-prettier@v1
-  - uses: gbtunney/snailicid3-actions/.github/actions/report-workspace@v1
-  - uses: gbtunney/snailicid3-actions/.github/actions/require-up-to-date@v1
-  - uses: gbtunney/snailicid3-actions/.github/actions/run-chromatic@v1
+  - uses: gbtunney/snailicid3-actions/.github/actions/report-repository@v2
+  - uses: gbtunney/snailicid3-actions/.github/actions/report-environment@v2
+  - uses: gbtunney/snailicid3-actions/.github/actions/report-prettier@v2
+  - uses: gbtunney/snailicid3-actions/.github/actions/report-workspace@v2
+  - uses: gbtunney/snailicid3-actions/.github/actions/require-up-to-date@v2
+  - uses: gbtunney/snailicid3-actions/.github/actions/run-chromatic@v2
 ```
 
 ### Requirements
@@ -205,7 +205,7 @@ Callers must install dependencies before using actions that invoke `snail-sh`:
 - uses: pnpm/action-setup@v6
 - uses: actions/setup-node@v7
   with:
-    node-version: '24'
+    node-version: "24"
 - run: pnpm install --frozen-lockfile
 ```
 
@@ -253,10 +253,10 @@ example.
 `pnpm-lock.yaml` is only rewritten when a caller asks for it. Every workflow
 that installs uses `lockfile_mode`:
 
-| `lockfile_mode` | Behaviour |
-| --- | --- |
-| `frozen` (default) | `pnpm install --frozen-lockfile`. A stale lockfile fails; nothing is rewritten. |
-| `reconcile` | `pnpm install --no-frozen-lockfile`. The existing lockfile is updated as needed to satisfy manifests; it is not deleted and resolved from scratch. |
+| `lockfile_mode`    | Behaviour                                                                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frozen` (default) | `pnpm install --frozen-lockfile`. A stale lockfile fails; nothing is rewritten.                                                                    |
+| `reconcile`        | `pnpm install --no-frozen-lockfile`. The existing lockfile is updated as needed to satisfy manifests; it is not deleted and resolved from scratch. |
 
 To repair a stale lockfile deliberately, run **Dispatch Workspace Update** with
 `repair_lockfile` enabled. Destructive reset / fresh re-resolution is separate
@@ -324,10 +324,26 @@ workflows test that boundary:
 
 - **Smoke Cross-Repo (main)** — on workflow/template changes to `main` and on
   demand. It covers release-plan, pipeline, and the Nx-target utility.
-- **Smoke Cross-Repo (v1)** — weekly and on demand against the tag consumers
-  pin. Its caller uses only inputs shared across the tag-transition boundary;
-  dispatch it again after promoting `v1`.
+- **Smoke Cross-Repo (v1)** — weekly and on demand against the `v1` tag, which
+  stays published for consumers that have not migrated. Its caller uses only
+  inputs shared across the tag-transition boundary; dispatch it again after
+  publishing a new major tag.
 
-The `v1` tag is promoted only after the new `main` contract is known-good;
-consumer caller sync happens after that promotion so synced templates never
-reference inputs the published tag does not yet declare.
+### Major version tags
+
+Consumers pin a rolling major-version alias (`v1`, `v2`, …) backed by an
+immutable release tag (`v1.0.1`, `v2.0.0`, …).
+
+**A breaking change to the reusable-workflow contract gets a new major tag; an
+existing major alias is never moved onto it.** Moving `v1` onto an incompatible
+contract breaks every consumer pinned to it at workflow startup, with zero jobs
+run and no diff to point at. `v1` therefore stays where it is for consumers that
+have not migrated, and the semantic caller contract (`release_mode`, `mode`,
+`call-release-observe.yml`) is published as `v2`.
+
+A major alias may still advance _within_ its own compatible line — `v1` to a
+later `v1.x` — as long as the published contract keeps accepting every input its
+consumers already pass.
+
+Consumer caller sync happens only after the new tag exists, so synced templates
+never reference a workflow or input the published tag does not declare.

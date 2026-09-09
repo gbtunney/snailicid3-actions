@@ -27,7 +27,7 @@ those, by name:
 ```yaml
 jobs:
     release_plan:
-        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v2
         secrets:
             GH_PAT: ${{ secrets.GH_PAT }}
             NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -62,14 +62,14 @@ jobs:
             actions: write
             id-token: write
             pull-requests: write
-        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v1
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-plan.yml@v2
 ```
 
 ### 3. Reference reusable workflows by their full path
 
 `./.github/workflows/...` resolves against the *consumer's* checkout, where the
 file does not exist. Callers outside this repository always use
-`gbtunney/snailicid3-actions/.github/workflows/<file>.yml@v1`.
+`gbtunney/snailicid3-actions/.github/workflows/<file>.yml@v2`.
 
 ## What each reusable workflow declares
 
@@ -88,8 +88,8 @@ file does not exist. Callers outside this repository always use
 `call-release-observe.yml` instead, which is read-only and declares no secrets.
 `dry_run`, `run_pipeline` and `upload_workspace_artifact` are deprecated: they
 map onto the modes, and a value that would break a release fails loudly rather
-than silently no-opping. Consumers pinning `@v1` should also pass
-`adapter_ref: v1` so the adapter comes from the same tag they call.
+than silently no-opping. Consumers pinning `@v2` should also pass
+`adapter_ref: v2` so the adapter comes from the same tag they call.
 
 `call-release-plan.yml` nests the other release workflows. It forwards
 `GH_PAT`/`NPM_TOKEN` to `call-apply-workspace-artifact.yml` by name too, so a
@@ -189,7 +189,7 @@ jobs:
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
 
-            - uses: gbtunney/snailicid3-actions/.github/actions/run-chromatic@v1
+            - uses: gbtunney/snailicid3-actions/.github/actions/run-chromatic@v2
               with:
                   mode: abort_on_error
 ```
