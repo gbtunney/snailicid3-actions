@@ -49,14 +49,14 @@ jobs:
     # and there is no phase-dependent branching here to get wrong.
     release_observe:
         name: release plan (observe)
-        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-observe.yml@v1
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-release-observe.yml@v2
         with:
             ref: ${{ github.event.pull_request.head.sha || github.sha }}
-            adapter_ref: v1
+            adapter_ref: v2
 
     validate:
         name: validate
-        uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v1
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-pipeline.yml@v2
         with:
             checkout_ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
             mode: abort_on_error
