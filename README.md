@@ -241,9 +241,14 @@ the shared pipeline would require this repository to know every consumer's
 project-token names. Instead, the consumer sets its own job-level `env:` and
 uses the shared `run-chromatic` action.
 
-`run-chromatic` owns the step policy (`skip`, `report`, `abort_on_error`) and a
-single `pnpm exec nx run-many -t chromatic`; the consumer owns which projects
-exist, which token each reads, and each project's Chromatic CLI flags.
+`run-chromatic` owns the step policy (`skip`, `report`, `abort_on_error`), the
+credential gate (`required_env`: skip with a notice when a named token is
+empty, as it is on fork and Dependabot pull requests), and a single streamed
+`pnpm exec nx run-many -t chromatic`; the consumer owns which projects exist,
+which token each reads, and each project's Chromatic CLI flags.
+
+Run it on `pull_request` only. A visual baseline is reviewed and accepted in the
+pull request that changes it; a push to `main` has already been through that.
 
 See [`templates/README.md`](templates/README.md) for the consumer-owned workflow
 example.

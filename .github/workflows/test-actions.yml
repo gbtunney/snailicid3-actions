@@ -75,6 +75,25 @@ jobs:
             - name: Synced consumer workflows must match their templates
               run: bin/sync-callers.sh --check "$RUNNER_TEMP/consumer"
 
+            # Consumers commit synced callers through their own Prettier
+            # (lint-staged), so a template that formatter rewrites drifts in
+            # every consumer the moment it lands. Format the synced copies with
+            # the consumers' shared config. They are copied inside the checkout
+            # because Prettier silently matches nothing outside its cwd.
+            - name: Synced consumer workflows must survive the consumer formatter
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  probe="test-fixtures/consumer-format/probe"
+                  mkdir -p "$probe"
+                  cp -R "$RUNNER_TEMP/consumer/.github" "$probe/"
+
+                  pnpm exec prettier \
+                    --config test-fixtures/consumer-format/prettier.config.ts \
+                    --check "$probe/.github/workflows/*.yml"
+
+                  rm -rf "$probe"
+
             # A deleted or renamed template leaves its generated copy behind in
             # every consumer, still wired to the old secret contract. Looping
             # over templates alone can never see that file, so prove the orphan
@@ -239,10 +258,56 @@ jobs:
               with:
                   mode: definitely-not-a-mode
 
+            # The fixture target always fails, so abort_on_error passing proves
+            # the target was never invoked: an unset credential skips it.
+            - name: Run Chromatic (missing credential) must skip, not fail
+              id: chromatic_missing
+              uses: $/.github/actions/run-chromatic
+              env:
+                  CHROMATIC_PROJECT_TOKEN_FIXTURE: ''
+              with:
+                  mode: abort_on_error
+                  required_env: CHROMATIC_PROJECT_TOKEN_FIXTURE
+
+            # With the credential present the target must run (and fail here).
+            - name: Run Chromatic (credential present) must run the target
+              id: chromatic_present
+              continue-on-error: true
+              uses: $/.github/actions/run-chromatic
+              env:
+                  CHROMATIC_PROJECT_TOKEN_FIXTURE: fixture-token
+              with:
+                  mode: abort_on_error
+                  required_env: CHROMATIC_PROJECT_TOKEN_FIXTURE
+
+            - name: Run Chromatic (bad required_env name) must be rejected
+              id: chromatic_bad_env
+              continue-on-error: true
+              uses: $/.github/actions/run-chromatic
+              with:
+                  mode: report
+                  required_env: 'not-a-name'
+
             - name: Assert Chromatic step policy
               shell: bash
               run: |
                   set -euo pipefail
+
+                  if [[ "${{ steps.chromatic_missing.outcome }}" != "success" ||
+                        "${{ steps.chromatic_missing.outputs.ran }}" != "false" ]]; then
+                    echo "::error::A missing credential should skip the target (got outcome=${{ steps.chromatic_missing.outcome }}, ran=${{ steps.chromatic_missing.outputs.ran }})."
+                    exit 1
+                  fi
+
+                  if [[ "${{ steps.chromatic_present.outcome }}" != "failure" ]]; then
+                    echo "::error::A present credential should run the failing fixture target (got ${{ steps.chromatic_present.outcome }})."
+                    exit 1
+                  fi
+
+                  if [[ "${{ steps.chromatic_bad_env.outcome }}" != "failure" ]]; then
+                    echo "::error::An invalid required_env name should have been rejected (got ${{ steps.chromatic_bad_env.outcome }})."
+                    exit 1
+                  fi
 
                   if [[ "${{ steps.chromatic_abort.outcome }}" != "failure" ]]; then
                     echo "::error::abort_on_error should have failed on a failing target (got ${{ steps.chromatic_abort.outcome }})."
@@ -254,7 +319,7 @@ jobs:
                     exit 1
                   fi
 
-                  echo "Chromatic step policy behaves: skip no-ops, report continues, abort_on_error and a bad mode fail."
+                  echo "Chromatic step policy behaves: skip no-ops, report continues, abort_on_error and a bad mode fail, a missing credential skips, a present one runs."
 
             - name: Assert scope-commit derives conventional messages
               shell: bash

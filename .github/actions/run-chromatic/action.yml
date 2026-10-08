@@ -15,6 +15,16 @@ inputs:
         description: Nx target to run for every project that defines it.
         required: false
         default: chromatic
+    required_env:
+        description: >
+            Whitespace-separated environment variable names the target needs, usually the project tokens. If any is empty the target is skipped with a notice instead of run: a fork or Dependabot pull request receives no repository secrets, and its author cannot fix that.
+        required: false
+        default: ''
+
+outputs:
+    ran:
+        description: "'true' when the target was invoked, 'false' when mode or a missing credential skipped it."
+        value: ${{ steps.gate.outputs.ran }}
 
 runs:
     using: composite
@@ -36,17 +46,51 @@ runs:
           shell: bash
           run: echo "mode=skip; the ${{ inputs.target }} target was not invoked and no credential is needed."
 
+        # Names are read indirectly, so this action still never has to know
+        # which token a project uses — only that the caller says it is needed.
+        - name: Require credentials
+          id: gate
+          shell: bash
+          env:
+              REQUIRED_ENV: ${{ inputs.required_env }}
+          run: |
+              set -euo pipefail
+
+              if [[ "${{ inputs.mode }}" == "skip" ]]; then
+                echo "ran=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+
+              missing=()
+              for name in $REQUIRED_ENV; do
+                if [[ ! "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                  echo "::error::required_env holds an invalid variable name: $name"
+                  exit 1
+                fi
+                if [[ -z "${!name:-}" ]]; then
+                  missing+=("$name")
+                fi
+              done
+
+              if (( ${#missing[@]} > 0 )); then
+                echo "::notice::${missing[*]} not available to this run; the ${{ inputs.target }} target was skipped."
+                echo "ran=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "ran=true" >> "$GITHUB_OUTPUT"
+              fi
+
         # One invocation for every project. Each project's target names the
         # token variable it reads and owns its own Chromatic CLI flags, so
         # projects with different tokens publish together; projects without
-        # the target are skipped by Nx.
+        # the target are skipped by Nx. Output is streamed: Nx otherwise hides
+        # a successful target's output, and with it the Chromatic build link.
         - name: Run Chromatic
-          if: ${{ inputs.mode != 'skip' }}
+          if: ${{ steps.gate.outputs.ran == 'true' }}
           shell: bash
           run: |
               set -euo pipefail
 
-              if pnpm exec nx run-many -t "${{ inputs.target }}"; then
+              if pnpm exec nx run-many -t "${{ inputs.target }}" --output-style=stream; then
                 exit 0
               fi
 

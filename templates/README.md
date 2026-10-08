@@ -151,12 +151,19 @@ orchestration while the consumer owns the credentials:
 | Owned here | Owned by the consumer |
 | --- | --- |
 | `mode` — `skip`, `report`, `abort_on_error` | which projects exist |
-| running `nx run-many -t chromatic` once for every project | which token each project reads |
-| turning a failed target into a warning or a failure | each project's Chromatic CLI flags |
+| `required_env` — skipping with a notice when a named token is empty | which token each project reads |
+| running `nx run-many -t chromatic` once for every project, output streamed | each project's Chromatic CLI flags |
+| turning a failed target into a warning or a failure | |
 
 Add a workflow like this to the consumer repository. It is **not** a synced
 template — the token names are repository-specific, so `bin/sync-callers.sh`
 must not own this file:
+
+Run it on `pull_request` only: a visual baseline is reviewed and accepted in the
+pull request that changes it, and a push to `main` has already been through
+that. List every token the targets read in `required_env`. A fork or Dependabot
+pull request receives no repository secrets, so the target is skipped with a
+notice rather than failing a run its author cannot fix.
 
 ```yaml
 name: Chromatic
@@ -164,6 +171,10 @@ name: Chromatic
 on:
     pull_request:
         branches: [main]
+
+concurrency:
+    group: chromatic-${{ github.event.pull_request.number }}
+    cancel-in-progress: true
 
 permissions:
     contents: read
@@ -192,10 +203,15 @@ jobs:
             - uses: gbtunney/snailicid3-actions/.github/actions/run-chromatic@v2
               with:
                   mode: abort_on_error
+                  required_env: >-
+                      CHROMATIC_PROJECT_TOKEN_GBT_SCOPE
+                      CHROMATIC_PROJECT_TOKEN_VIDEO_INTELLIGENCE
 ```
 
 Each project's `chromatic` target names the variable it reads and carries its
-own flags, so one invocation covers projects with different tokens, and
+own flags (for example `--storybook-build-dir storybook-static
+--exit-zero-on-changes`, uploading the build its `build:storybook` dependency
+already made and leaving visual changes to review in Chromatic), so one invocation covers projects with different tokens, and
 projects without the target are skipped by Nx.
 
 ## Changing the contract
