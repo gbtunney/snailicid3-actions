@@ -1,0 +1,213 @@
+{
+    "$comment": [
+        "Execution cases for npm-consumer-smoke.mjs: package name -> documented calls.",
+        "Each case is written to its own file in the consumer project and run with `node <file>`.",
+        "`expected` is compared with the last line of stdout, so finish by printing one JSON value.",
+        "Take calls from the package README so a case checks the documented public API, not internals.",
+        "A bin case gives `command` ([bin, ...args], run as `npx --no-install`) instead of `source`; `git: true` runs it in a fresh git repo with node_modules ignored and everything staged; `env` adds variables. Only add read-only bins."
+    ],
+    "@snailicid3/build-config": [
+        {
+            "name": "packageNameToDisplayName (plan subpath, README import)",
+            "source": [
+                "import { packageNameToDisplayName } from '@snailicid3/build-config/plan'",
+                "",
+                "console.log(JSON.stringify(packageNameToDisplayName('@snailicid3/build-config')))"
+            ],
+            "expected": "\"Build Config\""
+        }
+    ],
+    "@snailicid3/cli-app": [
+        {
+            "name": "initApp with a Zod options schema (README; zod reached through npm's hoisting)",
+            "source": [
+                "import { initApp } from '@snailicid3/cli-app'",
+                "import { z } from 'zod'",
+                "",
+                "const optionsSchema = z.object({",
+                "    tags: z.array(z.string()).default([]).meta({ alias: 'z', description: 'Tag; repeat this flag to supply multiple tags' }),",
+                "})",
+                "",
+                "await initApp(optionsSchema, { description: 'npm consumer smoke', name: 'smoke-cli', version: '1.0.0' }, (args) => {",
+                "    console.log(JSON.stringify(args.tags))",
+                "})"
+            ],
+            "expected": "[]"
+        }
+    ],
+    "@snailicid3/color": [
+        {
+            "name": "isHexColor / isValidColor / parseColorToHex (README)",
+            "source": [
+                "import { isHexColor, isValidColor, parseColorToHex } from '@snailicid3/color'",
+                "",
+                "console.log(JSON.stringify([isHexColor('#FF0000'), isHexColor('red'), isValidColor('red'), parseColorToHex('red')]))"
+            ],
+            "expected": "[true,false,true,\"#FF0000\"]"
+        }
+    ],
+    "@snailicid3/config": [
+        {
+            "name": "Prettier.config (consumer-npm README)",
+            "source": [
+                "import { Prettier } from '@snailicid3/config'",
+                "",
+                "const config = Prettier.config({ cwd: import.meta })",
+                "console.log(JSON.stringify([config.singleQuote, config.semi]))"
+            ],
+            "expected": "[true,false]"
+        },
+        {
+            "name": "snail-sh bin via config's compatibility shim (delegates to the owning package; drop when config's breaking release removes the shim bins)",
+            "command": [
+                "snail-sh",
+                "success",
+                "npm consumer"
+            ],
+            "expected": "[success] ✓ npm consumer"
+        },
+        {
+            "name": "scope-commit bin derives a message via config's compatibility shim (delegates to the owning package; drop when config's breaking release removes the shim bins)",
+            "git": true,
+            "env": {
+                "SCOPE_COMMIT_SKIP_COMMITLINT": "1"
+            },
+            "command": [
+                "scope-commit",
+                "--all",
+                "--message",
+                "chore",
+                "self test"
+            ],
+            "expected": "chore(root): self test"
+        }
+    ],
+    "@snailicid3/gbt-scope": [
+        {
+            "name": "GbtScopeFlatViewer server render (README props; react is a peer npm installs)",
+            "source": [
+                "import { createElement } from 'react'",
+                "import { renderToString } from 'react-dom/server'",
+                "import { GbtScopeFlatViewer } from '@snailicid3/gbt-scope'",
+                "",
+                "const html = renderToString(",
+                "    createElement(GbtScopeFlatViewer, { src: '/images/source-artwork.jpg', segments: 8, scaleFactor: 1.25, tileMode: 'mirror', tiling: 2 }),",
+                ")",
+                "console.log(JSON.stringify(html.includes('<canvas')))"
+            ],
+            "expected": "true"
+        }
+    ],
+    "@snailicid3/logger": [
+        {
+            "name": "statusPair (README)",
+            "source": [
+                "import { statusPair } from '@snailicid3/logger'",
+                "",
+                "const line = statusPair('logger', 'passed', { level: 'success' })",
+                "console.log(JSON.stringify(/logger\\s+passed/.test(line)))"
+            ],
+            "expected": "true"
+        },
+        {
+            "name": "statusPair via require() (CommonJS consumer)",
+            "format": "cjs",
+            "source": [
+                "const { statusPair } = require('@snailicid3/logger')",
+                "",
+                "const line = statusPair('logger', 'passed', { level: 'success' })",
+                "console.log(JSON.stringify(/logger\\s+passed/.test(line)))"
+            ],
+            "expected": "true"
+        },
+        {
+            "name": "snail-sh bin (owning package; canonical bin)",
+            "command": [
+                "snail-sh",
+                "success",
+                "npm consumer"
+            ],
+            "expected": "[success] ✓ npm consumer"
+        }
+    ],
+    "@snailicid3/node-utils": [
+        {
+            "name": "getFilename / getExt",
+            "source": [
+                "import { getExt, getFilename } from '@snailicid3/node-utils'",
+                "",
+                "console.log(JSON.stringify([getFilename('/a/b/file.txt'), getExt('/a/b/file.txt')]))"
+            ],
+            "expected": "[\"file\",\"txt\"]"
+        }
+    ],
+    "@snailicid3/storybook-config": [
+        {
+            "name": "defineStorybookMain default framework (README)",
+            "source": [
+                "import { defineStorybookMain } from '@snailicid3/storybook-config'",
+                "",
+                "console.log(JSON.stringify(defineStorybookMain().framework.name))"
+            ],
+            "expected": "\"@storybook/react-vite\""
+        }
+    ],
+    "@snailicid3/types": [
+        {
+            "name": "tg.isTruthy / tg.isNilOrEmpty (README)",
+            "source": [
+                "import { tg } from '@snailicid3/types'",
+                "",
+                "console.log(JSON.stringify([tg.isTruthy(0), tg.isTruthy('hello'), tg.isNilOrEmpty(null), tg.isNilOrEmpty([]), tg.isNilOrEmpty([1])]))"
+            ],
+            "expected": "[false,true,true,true,false]"
+        }
+    ],
+    "@snailicid3/utils": [
+        {
+            "name": "mapRange / roundToDecimals (README)",
+            "source": [
+                "import { mapRange, roundToDecimals } from '@snailicid3/utils'",
+                "",
+                "console.log(JSON.stringify([mapRange(0.5, [0, 1], [0, 100]), roundToDecimals(3.14159, 2)]))"
+            ],
+            "expected": "[50,3.14]"
+        },
+        {
+            "name": "fmt via require() (CommonJS consumer, README)",
+            "format": "cjs",
+            "source": [
+                "const { fmt } = require('@snailicid3/utils')",
+                "",
+                "console.log(JSON.stringify(fmt`Hello ${'world'}!`))"
+            ],
+            "expected": "\"Hello world!\""
+        }
+    ],
+    "@snailicid3/workspace": [
+        {
+            "name": "readWorkspaceEnvironment (README)",
+            "source": [
+                "import { readWorkspaceEnvironment } from '@snailicid3/workspace'",
+                "",
+                "console.log(JSON.stringify(readWorkspaceEnvironment({}).protectedBranches))"
+            ],
+            "expected": "[\"main\",\"master\"]"
+        },
+        {
+            "name": "scope-commit bin derives a message (owning package; canonical bin)",
+            "git": true,
+            "env": {
+                "SCOPE_COMMIT_SKIP_COMMITLINT": "1"
+            },
+            "command": [
+                "scope-commit",
+                "--all",
+                "--message",
+                "chore",
+                "self test"
+            ],
+            "expected": "chore(root): self test"
+        }
+    ]
+}

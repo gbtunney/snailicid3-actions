@@ -107,6 +107,7 @@ caller's grant is exactly what the innermost workflow can read.
 | `dispatch-pipeline.yml` | `call-pipeline.yml` | — |
 | `dispatch-nx-targets.yml` | `call-nx-targets.yml` | — |
 | `dispatch-smoke-matrix.yml` | `call-pipeline.yml` | — |
+| `dispatch-npm-consumer-smoke.yml` | `call-npm-consumer-smoke.yml` | — |
 | `dispatch-release-state.yml` | `call-detect-release-state.yml` | — |
 
 ## Pipeline policy vs. Nx utility

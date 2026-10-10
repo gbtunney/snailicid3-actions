@@ -1,0 +1,174 @@
+# ─────────────────────────────────────────────────────────────
+# WORKFLOW: npm Consumer Smoke
+# TYPE: reusable (workflow_call)
+# SOURCE: gbtunney/snailicid3-actions
+#
+# Purpose:
+#   Install published packages from the npm registry the way an outside
+#   consumer does — plain `npm install <name>@<version>` into an empty
+#   `npm init -y` project, one project per package — then import every
+#   declared public entry point and run the documented calls registered in
+#   .github/scripts/npm-consumer-smoke.cases.json. Each package gets a report
+#   in the format of the manual "NPM Package Consumer Smoke Test".
+#
+# What it deliberately does not do:
+#   - No pnpm. The runner gets Node and the npm that ships with it, nothing
+#     else, so pnpm behaviour cannot mask an npm consumer failure.
+#   - No checkout of the packages' source. The subject is the registry
+#     artifact, not the workspace that built it.
+#   - No fixing. A failure is the finding; its full output is the report.
+#
+# mode: report (default) records failures and succeeds; abort_on_error fails
+# the job when any package fails.
+# ─────────────────────────────────────────────────────────────
+
+name: z Call npm Consumer Smoke
+
+on:
+    workflow_call:
+        inputs:
+            packages:
+                description: >
+                    Whitespace-separated package specs (name, name@version, name@tag). Empty discovers every package the registry lists under `scope`.
+                required: false
+                default: ''
+                type: string
+
+            scope:
+                description: npm scope to discover when `packages` is empty.
+                required: false
+                default: '@snailicid3'
+                type: string
+
+            mode:
+                description: report (failures are findings) or abort_on_error (any failed package fails the job).
+                required: false
+                default: report
+                type: string
+
+            package_manager:
+                description: >
+                    npm (default) or yarn. yarn is Yarn Berry in Plug'n'Play mode through the corepack bundled with Node, adding each package's own required peers because Yarn does not install them.
+                required: false
+                default: npm
+                type: string
+
+            node_version:
+                description: Node version the consumer runs. npm is whatever that Node ships with.
+                required: false
+                default: '24'
+                type: string
+
+            cases_path:
+                description: >
+                    Optional path, in the caller repository, to an execution-cases JSON file. Empty uses the cases shipped beside the harness.
+                required: false
+                default: ''
+                type: string
+
+            harness_ref:
+                description: >
+                    Ref of gbtunney/snailicid3-actions to take the smoke script from. Consumers should pin the same tag they call this workflow at.
+                required: false
+                default: main
+                type: string
+
+        outputs:
+            tested:
+                description: Number of packages tested.
+                value: ${{ jobs.smoke.outputs.tested }}
+
+            failed:
+                description: Number of packages whose first failing stage was install, resolution, import, or runtime.
+                value: ${{ jobs.smoke.outputs.failed }}
+
+            failed_packages:
+                description: Space-delimited name@version entries that failed.
+                value: ${{ jobs.smoke.outputs.failed_packages }}
+
+permissions:
+    contents: read
+
+jobs:
+    smoke:
+        name: ${{ inputs.package_manager }} consumer (node ${{ inputs.node_version }})
+        runs-on: ubuntu-latest
+
+        outputs:
+            tested: ${{ steps.smoke.outputs.tested }}
+            failed: ${{ steps.smoke.outputs.failed }}
+            failed_packages: ${{ steps.smoke.outputs.failed_packages }}
+
+        steps:
+            - name: Validate smoke policy
+              shell: bash
+              env:
+                  MODE: ${{ inputs.mode }}
+                  PACKAGE_MANAGER: ${{ inputs.package_manager }}
+              run: |
+                  set -euo pipefail
+                  case "$MODE" in
+                    report|abort_on_error) ;;
+                    *) echo "::error::Invalid mode: $MODE. Expected report or abort_on_error."; exit 1 ;;
+                  esac
+                  case "$PACKAGE_MANAGER" in
+                    npm|yarn) ;;
+                    *) echo "::error::Invalid package_manager: $PACKAGE_MANAGER. Expected npm or yarn."; exit 1 ;;
+                  esac
+
+            - name: Checkout smoke harness
+              uses: actions/checkout@v7
+              with:
+                  repository: gbtunney/snailicid3-actions
+                  ref: ${{ inputs.harness_ref }}
+                  path: harness
+                  sparse-checkout: .github/scripts
+
+            - name: Checkout caller cases
+              if: ${{ inputs.cases_path != '' }}
+              uses: actions/checkout@v7
+              with:
+                  path: caller
+
+            # Node only. setup-node's dependency cache is off on purpose: there
+            # is no lockfile to key it on, and a consumer starts cold.
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: ${{ inputs.node_version }}
+
+            - name: Run consumer smoke
+              id: smoke
+              shell: bash
+              # Outside the checkouts, so no repository package.json or .npmrc
+              # sits above the consumer projects the script creates.
+              working-directory: ${{ runner.temp }}
+              env:
+                  PACKAGES: ${{ inputs.packages }}
+                  SCOPE: ${{ inputs.scope }}
+                  MODE: ${{ inputs.mode }}
+                  PACKAGE_MANAGER: ${{ inputs.package_manager }}
+                  CASES_PATH: ${{ inputs.cases_path }}
+              run: |
+                  set -euo pipefail
+
+                  args=(--mode "$MODE" --package-manager "$PACKAGE_MANAGER" --out "$RUNNER_TEMP/npm-consumer-smoke" --summary "$GITHUB_STEP_SUMMARY" --outputs "$GITHUB_OUTPUT")
+                  if [[ -n "${PACKAGES// /}" ]]; then
+                    args+=(--package "$PACKAGES")
+                  else
+                    args+=(--scope "$SCOPE")
+                  fi
+                  if [[ -n "$CASES_PATH" ]]; then
+                    args+=(--cases "$GITHUB_WORKSPACE/caller/$CASES_PATH")
+                  fi
+
+                  node "$GITHUB_WORKSPACE/harness/.github/scripts/npm-consumer-smoke.mjs" "${args[@]}"
+
+            - name: Upload consumer smoke report
+              if: ${{ always() }}
+              uses: actions/upload-artifact@v7
+              with:
+                  name: ${{ inputs.package_manager }}-consumer-smoke-node${{ inputs.node_version }}-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: ${{ runner.temp }}/npm-consumer-smoke
+                  if-no-files-found: ignore
+                  overwrite: true
