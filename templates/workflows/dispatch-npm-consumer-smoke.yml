@@ -1,0 +1,55 @@
+# ─────────────────────────────────────────────────────────────
+# CALLER TEMPLATE — copy this file into <your-repo>/.github/workflows/
+# Source of truth: gbtunney/snailicid3-actions/templates/workflows/
+# These are thin triggers; all logic lives in the reusable call-* workflows.
+# ─────────────────────────────────────────────────────────────
+# Install published packages from the npm registry as a plain npm consumer
+# (no pnpm, no workspace), import their public entry points, and report
+# which ones a normal npm user cannot use.
+name: Dispatch npm Consumer Smoke 📦
+
+on:
+    workflow_dispatch:
+        inputs:
+            packages:
+                description: Whitespace-separated package specs (name or name@version); empty tests the whole scope
+                required: false
+                default: ''
+                type: string
+
+            scope:
+                description: npm scope to discover when packages is empty
+                required: false
+                default: '@snailicid3'
+                type: string
+
+            mode:
+                description: report (failures are findings) or abort_on_error
+                required: true
+                default: report
+                type: choice
+                options:
+                    - report
+                    - abort_on_error
+
+            node_version:
+                description: Node version the consumer runs
+                required: true
+                default: '24'
+                type: string
+
+# A caller must grant at least the permissions the called workflow declares,
+# or the run dies at startup with zero jobs.
+permissions:
+    contents: read
+
+jobs:
+    npm_consumer_smoke:
+        uses: gbtunney/snailicid3-actions/.github/workflows/call-npm-consumer-smoke.yml@v2
+        # No secrets: call-npm-consumer-smoke.yml declares none.
+        with:
+            packages: ${{ inputs.packages }}
+            scope: ${{ inputs.scope }}
+            mode: ${{ inputs.mode }}
+            node_version: ${{ inputs.node_version }}
+            harness_ref: v2
