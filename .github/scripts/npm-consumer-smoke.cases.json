@@ -58,12 +58,16 @@
             "expected": "[true,false]"
         },
         {
-            "name": "snail-sh bin (as workflows call it)",
-            "command": ["snail-sh", "success", "npm consumer"],
+            "name": "snail-sh bin via config's compatibility shim (delegates to the owning package; drop when config's breaking release removes the shim bins)",
+            "command": [
+                "snail-sh",
+                "success",
+                "npm consumer"
+            ],
             "expected": "[success] ✓ npm consumer"
         },
         {
-            "name": "scope-commit bin derives a message (as test-actions calls it; read-only)",
+            "name": "scope-commit bin derives a message via config's compatibility shim (delegates to the owning package; drop when config's breaking release removes the shim bins)",
             "git": true,
             "env": {
                 "SCOPE_COMMIT_SKIP_COMMITLINT": "1"
@@ -117,8 +121,12 @@
             "expected": "true"
         },
         {
-            "name": "snail-sh bin (as workflows call it)",
-            "command": ["snail-sh", "success", "npm consumer"],
+            "name": "snail-sh bin (owning package; canonical bin)",
+            "command": [
+                "snail-sh",
+                "success",
+                "npm consumer"
+            ],
             "expected": "[success] ✓ npm consumer"
         }
     ],
@@ -187,7 +195,7 @@
             "expected": "[\"main\",\"master\"]"
         },
         {
-            "name": "scope-commit bin derives a message (as test-actions calls it; read-only)",
+            "name": "scope-commit bin derives a message (owning package; canonical bin)",
             "git": true,
             "env": {
                 "SCOPE_COMMIT_SKIP_COMMITLINT": "1"
