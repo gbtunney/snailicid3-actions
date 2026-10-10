@@ -168,3 +168,7 @@ examples
 
 .cursor/rules/nx-rules.mdc
 .github/instructions/nx.instructions.md
+
+# The npm consumer smoke harness is plain ESM so it runs on bare Node with no
+# pnpm, tsx, or install step; un-ignore it from the JSLike rules above.
+!/.github/scripts/*.mjs

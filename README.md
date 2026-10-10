@@ -329,6 +329,55 @@ workflows test that boundary:
   inputs shared across the tag-transition boundary; dispatch it again after
   publishing a new major tag.
 
+### npm consumer smoke
+
+**Smoke npm Consumer** answers, per published package: can a normal npm user
+install it from the registry, import it, and call a documented function? It
+runs weekly, on demand, and on pull requests that change the harness, on Node
+22 and 24.
+
+For each package in the `@snailicid3` registry scope (discovered from the
+registry, so packages published from other repositories such as
+`@snailicid3/gbt-scope` are included) it:
+
+1. runs `npm init -y` and `npm install <name>@<version>` in an empty directory —
+   no pnpm, no workspace, no links, no local tarballs — and checks the lockfile
+   resolved the package from the registry;
+2. imports every subpath the package's `exports` declares, as ESM and, where a
+   `require` condition is offered, as CommonJS. An entry point that needs a
+   documented optional peer is reported as skipped, not failed;
+3. runs the documented calls registered in
+   [`.github/scripts/npm-consumer-smoke.cases.json`](.github/scripts/npm-consumer-smoke.cases.json),
+   taken from each package's README.
+
+Each package gets a report in the format of the manual _NPM Package Consumer
+Smoke Test_ — environment, exact install command, full test files, unedited
+errors, and the first stage that failed. The table goes to the run summary;
+the full reports are the `npm-consumer-smoke-*` artifact. Failures are warning
+annotations and do not fail the run unless it is dispatched with
+`mode: abort_on_error`.
+
+Run it locally with nothing but Node:
+
+```sh
+node .github/scripts/npm-consumer-smoke.mjs --scope @snailicid3 --out ./npm-consumer-smoke-report
+node .github/scripts/npm-consumer-smoke.mjs --package "@snailicid3/utils @snailicid3/logger@0.1.0"
+```
+
+Other repositories can call `call-npm-consumer-smoke.yml` with `packages`,
+`scope`, `mode`, `node_version`, and their own `cases_path`.
+
+### npm host smoke
+
+**Smoke npm Host** asks the opposite question: can a plain npm _repository_
+run the pipeline? It scaffolds the raw `npm create vite` React + TypeScript
+template with npm and runs three lanes against it — the host's own npm
+toolchain as a baseline, `call-pipeline.yml`'s install path and routines as
+they stand today, and an npm-in-repo / pnpm-in-action lane that derives a
+lockfile with `pnpm import` and must leave `package.json` and
+`package-lock.json` untouched. A mirror guard fails the run if
+`call-pipeline.yml` stops containing the steps the as-is lane mirrors.
+
 ### Major version tags
 
 Consumers pin a rolling major-version alias (`v1`, `v2`, …) backed by an

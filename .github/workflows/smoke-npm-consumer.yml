@@ -1,0 +1,73 @@
+name: Smoke npm Consumer 📦
+
+# SOURCE: gbtunney/snailicid3-actions
+#
+# Installs every published @snailicid3 package from the npm registry with
+# plain npm — no pnpm, no workspace — imports its public entry points, runs
+# its documented calls, and reports which packages a normal npm consumer
+# cannot use. Weekly, on demand, and on pull requests that change the
+# harness, so a harness change is proven against the real registry before it
+# merges.
+#
+# Findings do not fail the run by default: each failed package is a warning
+# annotation plus a full report in the step summary and the uploaded
+# artifact. Dispatch with mode abort_on_error to make failures fail the run.
+
+on:
+    workflow_dispatch:
+        inputs:
+            packages:
+                description: Whitespace-separated package specs; empty tests every published @snailicid3 package.
+                required: false
+                default: ''
+                type: string
+            mode:
+                description: report or abort_on_error
+                required: false
+                default: report
+                type: choice
+                options:
+                    - report
+                    - abort_on_error
+            node_versions:
+                description: JSON array of Node versions to run the consumer on.
+                required: false
+                default: '["22", "24"]'
+                type: string
+    schedule:
+        - cron: '0 13 * * 1'
+    pull_request:
+        paths:
+            - '.github/scripts/npm-consumer-smoke*'
+            - '.github/workflows/call-npm-consumer-smoke.yml'
+            - '.github/workflows/smoke-npm-consumer.yml'
+    push:
+        branches: [main]
+        paths:
+            - '.github/scripts/npm-consumer-smoke*'
+            - '.github/workflows/call-npm-consumer-smoke.yml'
+            - '.github/workflows/smoke-npm-consumer.yml'
+
+concurrency:
+    group: smoke-npm-consumer-${{ github.event.pull_request.number || github.ref_name }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    consumer:
+        name: node-${{ matrix.node }}
+        strategy:
+            fail-fast: false
+            matrix:
+                node: ${{ fromJSON(inputs.node_versions || '["22", "24"]') }}
+        uses: ./.github/workflows/call-npm-consumer-smoke.yml
+        # No secrets: call-npm-consumer-smoke.yml declares none. Public
+        # registry reads need no token, which is also what a consumer has.
+        with:
+            packages: ${{ inputs.packages || '' }}
+            mode: ${{ inputs.mode || 'report' }}
+            node_version: ${{ matrix.node }}
+            # A pull request tests its own harness, not main's.
+            harness_ref: ${{ github.event.pull_request.head.sha || github.sha }}

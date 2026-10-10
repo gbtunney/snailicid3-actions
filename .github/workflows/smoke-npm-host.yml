@@ -1,0 +1,365 @@
+name: Smoke npm Host 🧪
+
+# SOURCE: gbtunney/snailicid3-actions
+#
+# Can a plain npm repository run the snailicid3 pipeline?
+#
+# The host is generic on purpose: the raw `npm create vite` React + TypeScript
+# template, installed with npm, nothing added — no @snailicid3 packages, no Nx,
+# no pnpm. Three lanes run against the same scaffold:
+#
+#   npm native      — the host's own toolchain (npm ci, build, lint). The
+#                     baseline: if this fails the scaffold is broken and the
+#                     other lanes prove nothing.
+#   pipeline as-is  — the install path and routines of call-pipeline.yml,
+#                     step for step, as they would meet this repository today.
+#   pnpm in action  — npm stays the repository's package manager; the action
+#                     derives a pnpm lockfile with `pnpm import`, installs
+#                     frozen, and runs the routines with pnpm, leaving the
+#                     repository's own files untouched.
+#
+# A reusable workflow always checks out its caller's repository root, so the
+# as-is lane mirrors call-pipeline.yml's steps rather than calling it. The
+# mirror guard job fails when call-pipeline.yml no longer contains the lines
+# mirrored here, so the lane cannot silently test a pipeline that no longer
+# exists.
+#
+# Lane failures are findings and do not fail the run; only a broken baseline
+# or a stale mirror does.
+
+on:
+    workflow_dispatch:
+    schedule:
+        - cron: '30 13 * * 1'
+    pull_request:
+        paths:
+            - '.github/workflows/call-pipeline.yml'
+            - '.github/workflows/smoke-npm-host.yml'
+    push:
+        branches: [main]
+        paths:
+            - '.github/workflows/call-pipeline.yml'
+            - '.github/workflows/smoke-npm-host.yml'
+
+concurrency:
+    group: smoke-npm-host-${{ github.event.pull_request.number || github.ref_name }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+env:
+    HUSKY: 0
+    # Pinned so the template only changes when this line does; the template's
+    # own dependency ranges still float, as they do for anyone scaffolding today.
+    CREATE_VITE_VERSION: 9.2.1
+    NODE_VERSION: '24'
+    SCAFFOLD_ARTIFACT: npm-host-scaffold-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+    mirror_guard:
+        name: mirror guard
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout pipeline source
+              uses: actions/checkout@v7
+              with:
+                  sparse-checkout: .github/workflows
+
+            - name: call-pipeline.yml must still contain the mirrored steps
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  pipeline=.github/workflows/call-pipeline.yml
+                  missing=0
+                  while IFS= read -r line; do
+                    [[ -z "$line" ]] && continue
+                    if ! grep -qF -- "$line" "$pipeline"; then
+                      echo "::error file=$pipeline::No longer contains '$line' — update the pipeline-as-is lane in smoke-npm-host.yml to match."
+                      missing=1
+                    fi
+                  done <<'MIRRORED'
+                  uses: pnpm/action-setup@v6
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
+                  if pnpm install --frozen-lockfile; then
+                  run: pnpm exec nx report
+                  run: pnpm build
+                  run: pnpm check
+                  MIRRORED
+                  exit "$missing"
+
+    scaffold:
+        name: scaffold raw Vite React app (npm)
+        runs-on: ubuntu-latest
+        steps:
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+
+            - name: Scaffold and install with npm
+              shell: bash
+              working-directory: ${{ runner.temp }}
+              run: |
+                  set -euo pipefail
+                  npm create "vite@$CREATE_VITE_VERSION" host -- --template react-ts --no-interactive
+                  cd host
+                  # What the repository owner would commit: package.json plus
+                  # the package-lock.json this install writes.
+                  npm install --no-audit --no-fund
+                  rm -rf node_modules
+                  {
+                    echo "## 🧪 npm host scaffold"
+                    echo ""
+                    echo "\`npm create vite@$CREATE_VITE_VERSION -- --template react-ts\` · node \`$(node --version)\` · npm \`$(npm --version)\`"
+                    echo ""
+                    echo '```json'
+                    cat package.json
+                    echo '```'
+                  } >> "$GITHUB_STEP_SUMMARY"
+                  tar -czf "$RUNNER_TEMP/npm-host.tar.gz" .
+
+            - name: Upload scaffold
+              uses: actions/upload-artifact@v7
+              with:
+                  name: ${{ env.SCAFFOLD_ARTIFACT }}
+                  path: ${{ runner.temp }}/npm-host.tar.gz
+                  if-no-files-found: error
+
+    npm_native:
+        name: npm native (baseline)
+        needs: scaffold
+        runs-on: ubuntu-latest
+        outputs:
+            install: ${{ steps.install.outcome }}
+            build: ${{ steps.build.outcome }}
+            lint: ${{ steps.lint.outcome }}
+        steps:
+            - name: Download scaffold
+              uses: actions/download-artifact@v8
+              with:
+                  name: ${{ env.SCAFFOLD_ARTIFACT }}
+                  path: ${{ runner.temp }}
+
+            - name: Restore scaffold as the repository root
+              run: tar -xzf "$RUNNER_TEMP/npm-host.tar.gz" -C "$GITHUB_WORKSPACE"
+
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: npm
+
+            - name: npm ci
+              id: install
+              run: npm ci --no-audit --no-fund
+
+            - name: npm run build
+              id: build
+              run: npm run build
+
+            - name: npm run lint
+              id: lint
+              run: npm run lint
+
+    pipeline_as_is:
+        name: pipeline as-is
+        needs: scaffold
+        runs-on: ubuntu-latest
+        outputs:
+            setup_pnpm: ${{ steps.setup_pnpm.outcome }}
+            setup_node: ${{ steps.setup_node.outcome }}
+            install: ${{ steps.install.outcome }}
+            nx_report: ${{ steps.nx_report.outcome }}
+            build: ${{ steps.build.outcome }}
+            check: ${{ steps.check.outcome }}
+        steps:
+            - name: Download scaffold
+              uses: actions/download-artifact@v8
+              with:
+                  name: ${{ env.SCAFFOLD_ARTIFACT }}
+                  path: ${{ runner.temp }}
+
+            - name: Restore scaffold as the repository root
+              run: tar -xzf "$RUNNER_TEMP/npm-host.tar.gz" -C "$GITHUB_WORKSPACE"
+
+            # ── mirrored from call-pipeline.yml; the mirror guard keeps these honest ──
+
+            - name: pnpm/action-setup (as call-pipeline.yml)
+              id: setup_pnpm
+              continue-on-error: true
+              uses: pnpm/action-setup@v6
+              with:
+                  run_install: false
+                  cache: false
+
+            - name: actions/setup-node with pnpm cache (as call-pipeline.yml)
+              id: setup_node
+              continue-on-error: true
+              uses: actions/setup-node@v7
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: pnpm
+                  cache-dependency-path: pnpm-lock.yaml
+
+            - name: pnpm install --frozen-lockfile (as call-pipeline.yml)
+              id: install
+              continue-on-error: true
+              run: pnpm install --frozen-lockfile
+
+            - name: pnpm exec nx report (as call-pipeline.yml)
+              id: nx_report
+              continue-on-error: true
+              run: pnpm exec nx report
+
+            - name: pnpm build (as call-pipeline.yml)
+              id: build
+              continue-on-error: true
+              run: pnpm build
+
+            - name: pnpm check (as call-pipeline.yml, default check_mode)
+              id: check
+              continue-on-error: true
+              run: pnpm check
+
+    pnpm_in_action:
+        name: pnpm in action, npm in repo
+        needs: scaffold
+        runs-on: ubuntu-latest
+        outputs:
+            setup_pnpm: ${{ steps.setup_pnpm.outcome }}
+            import: ${{ steps.import.outcome }}
+            install: ${{ steps.install.outcome }}
+            build: ${{ steps.build.outcome }}
+            lint: ${{ steps.lint.outcome }}
+            untouched: ${{ steps.untouched.outcome }}
+        steps:
+            - name: Download scaffold
+              uses: actions/download-artifact@v8
+              with:
+                  name: ${{ env.SCAFFOLD_ARTIFACT }}
+                  path: ${{ runner.temp }}
+
+            - name: Restore scaffold as the repository root
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  tar -xzf "$RUNNER_TEMP/npm-host.tar.gz" -C "$GITHUB_WORKSPACE"
+                  sha256sum package.json package-lock.json > "$RUNNER_TEMP/host-manifests.sha256"
+
+            # The host declares no packageManager, so the action must name the
+            # pnpm it brings rather than read one from the repository.
+            - name: Setup pnpm (version owned by the action)
+              id: setup_pnpm
+              continue-on-error: true
+              uses: pnpm/action-setup@v6
+              with:
+                  version: 10
+                  run_install: false
+
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+
+            - name: pnpm import (pnpm-lock.yaml from package-lock.json)
+              id: import
+              continue-on-error: true
+              run: pnpm import
+
+            - name: pnpm install --frozen-lockfile
+              id: install
+              continue-on-error: true
+              run: pnpm install --frozen-lockfile
+
+            - name: pnpm run build
+              id: build
+              continue-on-error: true
+              run: pnpm run build
+
+            - name: pnpm run lint
+              id: lint
+              continue-on-error: true
+              run: pnpm run lint
+
+            # The derived pnpm-lock.yaml is the action's working state, never
+            # something to commit back into an npm repository.
+            - name: Repository manifests must be untouched
+              id: untouched
+              continue-on-error: true
+              run: sha256sum --check "$RUNNER_TEMP/host-manifests.sha256"
+
+    report:
+        name: report
+        needs:
+            [mirror_guard, scaffold, npm_native, pipeline_as_is, pnpm_in_action]
+        if: ${{ always() }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Write lane truth table
+              shell: bash
+              env:
+                  GUARD: ${{ needs.mirror_guard.result }}
+                  SCAFFOLD: ${{ needs.scaffold.result }}
+                  NATIVE_INSTALL: ${{ needs.npm_native.outputs.install }}
+                  NATIVE_BUILD: ${{ needs.npm_native.outputs.build }}
+                  NATIVE_LINT: ${{ needs.npm_native.outputs.lint }}
+                  ASIS_SETUP_PNPM: ${{ needs.pipeline_as_is.outputs.setup_pnpm }}
+                  ASIS_SETUP_NODE: ${{ needs.pipeline_as_is.outputs.setup_node }}
+                  ASIS_INSTALL: ${{ needs.pipeline_as_is.outputs.install }}
+                  ASIS_NX_REPORT: ${{ needs.pipeline_as_is.outputs.nx_report }}
+                  ASIS_BUILD: ${{ needs.pipeline_as_is.outputs.build }}
+                  ASIS_CHECK: ${{ needs.pipeline_as_is.outputs.check }}
+                  HYBRID_SETUP_PNPM: ${{ needs.pnpm_in_action.outputs.setup_pnpm }}
+                  HYBRID_IMPORT: ${{ needs.pnpm_in_action.outputs.import }}
+                  HYBRID_INSTALL: ${{ needs.pnpm_in_action.outputs.install }}
+                  HYBRID_BUILD: ${{ needs.pnpm_in_action.outputs.build }}
+                  HYBRID_LINT: ${{ needs.pnpm_in_action.outputs.lint }}
+                  HYBRID_UNTOUCHED: ${{ needs.pnpm_in_action.outputs.untouched }}
+              run: |
+                  set -euo pipefail
+
+                  mark() {
+                    case "${1:-}" in
+                      success) echo "✅ success" ;;
+                      failure) echo "❌ failure" ;;
+                      skipped) echo "⏭️ skipped" ;;
+                      *) echo "— not reached" ;;
+                    esac
+                  }
+
+                  {
+                    echo "## 🧪 Can a plain npm repository run the pipeline?"
+                    echo ""
+                    echo "Host: raw \`npm create vite@$CREATE_VITE_VERSION -- --template react-ts\`, installed with npm."
+                    echo ""
+                    echo "| Lane | Step | Outcome |"
+                    echo "| --- | --- | --- |"
+                    echo "| npm native | \`npm ci\` | $(mark "$NATIVE_INSTALL") |"
+                    echo "| npm native | \`npm run build\` | $(mark "$NATIVE_BUILD") |"
+                    echo "| npm native | \`npm run lint\` | $(mark "$NATIVE_LINT") |"
+                    echo "| pipeline as-is | \`pnpm/action-setup@v6\` (version from \`packageManager\`) | $(mark "$ASIS_SETUP_PNPM") |"
+                    echo "| pipeline as-is | \`setup-node\` with \`cache: pnpm\` on \`pnpm-lock.yaml\` | $(mark "$ASIS_SETUP_NODE") |"
+                    echo "| pipeline as-is | \`pnpm install --frozen-lockfile\` | $(mark "$ASIS_INSTALL") |"
+                    echo "| pipeline as-is | \`pnpm exec nx report\` | $(mark "$ASIS_NX_REPORT") |"
+                    echo "| pipeline as-is | \`pnpm build\` | $(mark "$ASIS_BUILD") |"
+                    echo "| pipeline as-is | \`pnpm check\` | $(mark "$ASIS_CHECK") |"
+                    echo "| pnpm in action | \`pnpm/action-setup@v6\` (version from the action) | $(mark "$HYBRID_SETUP_PNPM") |"
+                    echo "| pnpm in action | \`pnpm import\` | $(mark "$HYBRID_IMPORT") |"
+                    echo "| pnpm in action | \`pnpm install --frozen-lockfile\` | $(mark "$HYBRID_INSTALL") |"
+                    echo "| pnpm in action | \`pnpm run build\` | $(mark "$HYBRID_BUILD") |"
+                    echo "| pnpm in action | \`pnpm run lint\` | $(mark "$HYBRID_LINT") |"
+                    echo "| pnpm in action | \`package.json\` + \`package-lock.json\` untouched | $(mark "$HYBRID_UNTOUCHED") |"
+                    echo ""
+                    echo "Mirror guard: \`$GUARD\` · scaffold: \`$SCAFFOLD\`"
+                  } | tee -a "$GITHUB_STEP_SUMMARY"
+
+                  if [[ "$GUARD" != "success" ]]; then
+                    echo "::error::The pipeline-as-is lane no longer mirrors call-pipeline.yml; its results are not evidence until it does."
+                    exit 1
+                  fi
+                  if [[ "$SCAFFOLD" != "success" || "$NATIVE_INSTALL" != "success" || "$NATIVE_BUILD" != "success" || "$NATIVE_LINT" != "success" ]]; then
+                    echo "::error::The npm-native baseline failed, so the scaffold itself is broken and the other lanes prove nothing."
+                    exit 1
+                  fi
