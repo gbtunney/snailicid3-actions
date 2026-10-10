@@ -346,7 +346,7 @@ registry, so packages published from other repositories such as
 2. imports every subpath the package's `exports` declares, as ESM and, where a
    `require` condition is offered, as CommonJS. An entry point that needs a
    documented optional peer is reported as skipped, not failed;
-3. runs the documented calls registered in
+3. runs the documented calls and read-only bins (`snail-sh`, `scope-commit`) registered in
    [`.github/scripts/npm-consumer-smoke.cases.json`](.github/scripts/npm-consumer-smoke.cases.json),
    taken from each package's README.
 

@@ -3,7 +3,8 @@
         "Execution cases for npm-consumer-smoke.mjs: package name -> documented calls.",
         "Each case is written to its own file in the consumer project and run with `node <file>`.",
         "`expected` is compared with the last line of stdout, so finish by printing one JSON value.",
-        "Take calls from the package README so a case checks the documented public API, not internals."
+        "Take calls from the package README so a case checks the documented public API, not internals.",
+        "A bin case gives `command` ([bin, ...args], run as `npx --no-install`) instead of `source`; `git: true` runs it in a fresh git repo with node_modules ignored and everything staged; `env` adds variables. Only add read-only bins."
     ],
     "@snailicid3/build-config": [
         {
@@ -55,6 +56,26 @@
                 "console.log(JSON.stringify([config.singleQuote, config.semi]))"
             ],
             "expected": "[true,false]"
+        },
+        {
+            "name": "snail-sh bin (as workflows call it)",
+            "command": ["snail-sh", "success", "npm consumer"],
+            "expected": "[success] ✓ npm consumer"
+        },
+        {
+            "name": "scope-commit bin derives a message (as test-actions calls it; read-only)",
+            "git": true,
+            "env": {
+                "SCOPE_COMMIT_SKIP_COMMITLINT": "1"
+            },
+            "command": [
+                "scope-commit",
+                "--all",
+                "--message",
+                "chore",
+                "self test"
+            ],
+            "expected": "chore(root): self test"
         }
     ],
     "@snailicid3/gbt-scope": [
@@ -94,6 +115,11 @@
                 "console.log(JSON.stringify(/logger\\s+passed/.test(line)))"
             ],
             "expected": "true"
+        },
+        {
+            "name": "snail-sh bin (as workflows call it)",
+            "command": ["snail-sh", "success", "npm consumer"],
+            "expected": "[success] ✓ npm consumer"
         }
     ],
     "@snailicid3/node-utils": [
@@ -159,6 +185,21 @@
                 "console.log(JSON.stringify(readWorkspaceEnvironment({}).protectedBranches))"
             ],
             "expected": "[\"main\",\"master\"]"
+        },
+        {
+            "name": "scope-commit bin derives a message (as test-actions calls it; read-only)",
+            "git": true,
+            "env": {
+                "SCOPE_COMMIT_SKIP_COMMITLINT": "1"
+            },
+            "command": [
+                "scope-commit",
+                "--all",
+                "--message",
+                "chore",
+                "self test"
+            ],
+            "expected": "chore(root): self test"
         }
     ]
 }

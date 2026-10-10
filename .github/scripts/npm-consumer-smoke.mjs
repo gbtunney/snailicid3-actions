@@ -176,12 +176,21 @@ const consumerEnvironment = () =>
         ),
     )
 
-const run = (command, args, { cwd, timeout = RUN_TIMEOUT_MS } = {}) => {
+const run = (
+    command,
+    args,
+    { cwd, timeout = RUN_TIMEOUT_MS, env = {} } = {},
+) => {
     const started = Date.now()
     const result = spawnSync(command, args, {
         cwd,
         encoding: 'utf8',
-        env: { ...consumerEnvironment(), NO_COLOR: '1', FORCE_COLOR: '0' },
+        env: {
+            ...consumerEnvironment(),
+            NO_COLOR: '1',
+            FORCE_COLOR: '0',
+            ...env,
+        },
         maxBuffer: 64 * 1024 * 1024,
         shell: process.platform === 'win32',
         timeout,
@@ -425,8 +434,13 @@ const smokePackage = (spec, context) => {
         return report
     }
 
+    // `npm init -y` names the project after its directory, so the directory
+    // must make a valid npm package name, as a person's project folder would.
     const projectRoot = mkdtempSync(
-        join(context.root, `${name.replace(/[@/]/g, '_')}-`),
+        join(
+            context.root,
+            `consumer-${name.replace(/^@/, '').replace(/\//g, '-')}-`,
+        ),
     )
     report.projectRoot = projectRoot
 
@@ -604,11 +618,32 @@ const smokePackage = (spec, context) => {
         }
     })
 
-    // 4 ── execute documented functions, when a case is registered.
+    // 4 ── execute documented functions and bins, when a case is registered.
     for (const [index, testCase] of (context.cases[name] ?? []).entries()) {
-        const file = `execute-${index}.${testCase.format === 'cjs' ? 'cjs' : 'mjs'}`
-        const source = writeTestFile(projectRoot, file, testCase.source)
-        const outcome = run(process.execPath, [file], { cwd: projectRoot })
+        if (testCase.git) prepareGitRepository(projectRoot)
+        let file
+        let source
+        let runCommand
+        let outcome
+        if (testCase.command) {
+            // A bin case runs the installed bin the way a user types it.
+            runCommand = ['npx', '--no-install', ...testCase.command]
+                .map(shellQuote)
+                .join(' ')
+            source = runCommand
+            outcome = run('npx', ['--no-install', ...testCase.command], {
+                cwd: projectRoot,
+                env: testCase.env,
+            })
+        } else {
+            file = `execute-${index}.${testCase.format === 'cjs' ? 'cjs' : 'mjs'}`
+            source = writeTestFile(projectRoot, file, testCase.source)
+            runCommand = `node ${file}`
+            outcome = run(process.execPath, [file], {
+                cwd: projectRoot,
+                env: testCase.env,
+            })
+        }
         // The last line is the case's answer; anything a package prints first
         // (banners, logging) stays in the report's full terminal output.
         const actual = outcome.stdout.trim().split(/\r?\n/).at(-1)?.trim() ?? ''
@@ -616,6 +651,9 @@ const smokePackage = (spec, context) => {
             name: testCase.name,
             file,
             source,
+            runCommand,
+            kind: testCase.command ? 'bin' : 'module',
+            env: testCase.env,
             expected: testCase.expected,
             actual,
             outcome,
@@ -631,6 +669,22 @@ const smokePackage = (spec, context) => {
 
     report.result = finalResult(report)
     return report
+}
+
+const shellQuote = (value) =>
+    /^[A-Za-z0-9_./:=@-]+$/.test(value)
+        ? value
+        : `'${value.replace(/'/g, `'\\''`)}'`
+
+/**
+ * Turn the consumer project into the git repository a bin expects to run in:
+ * dependencies ignored, everything else staged, nothing committed.
+ */
+const prepareGitRepository = (projectRoot) => {
+    if (existsSync(join(projectRoot, '.git'))) return
+    writeFileSync(join(projectRoot, '.gitignore'), 'node_modules\n')
+    run('git', ['init', '-q'], { cwd: projectRoot })
+    run('git', ['add', '-A'], { cwd: projectRoot })
 }
 
 const importCheck = (check, projectRoot, optionalPeers) => {
@@ -831,15 +885,22 @@ const packageMarkdown = (report, environment) => {
         push(
             `### ${execution.name}`,
             '',
-            `Run command: \`node ${execution.file}\``,
+            `Run command: \`${execution.runCommand}\`${
+                Object.keys(execution.env ?? {}).length > 0
+                    ? ` with ${Object.entries(execution.env)
+                          .map(([key, value]) => `\`${key}=${value}\``)
+                          .join(' ')}`
+                    : ''
+            }`,
             '',
-            fence(execution.source.trimEnd(), 'js'),
-            '',
+            ...(execution.kind === 'bin'
+                ? []
+                : [fence(execution.source.trimEnd(), 'js'), '']),
         )
         push(
             fence(
                 [
-                    `Function executed: ${yesNo(execution.outcome.ok)}`,
+                    `${execution.kind === 'bin' ? 'Bin executed' : 'Function executed'}: ${yesNo(execution.outcome.ok)}`,
                     '',
                     `Expected result: ${execution.expected}`,
                     `Actual result: ${execution.actual || '(none)'}`,
@@ -974,14 +1035,26 @@ const loadCases = (path, explicit) => {
     const cases = {}
     for (const [name, entries] of Object.entries(raw)) {
         if (name.startsWith('$')) continue
-        cases[name] = entries.map((entry) => ({
-            name: entry.name,
-            format: entry.format ?? 'esm',
-            source: Array.isArray(entry.source)
-                ? entry.source
-                : String(entry.source).split('\n'),
-            expected: String(entry.expected),
-        }))
+        cases[name] = entries.map((entry) => {
+            if (Boolean(entry.command) === Boolean(entry.source)) {
+                throw new Error(
+                    `case "${entry.name}" for ${name} needs exactly one of source or command`,
+                )
+            }
+            return {
+                name: entry.name,
+                format: entry.format ?? 'esm',
+                command: entry.command ? entry.command.map(String) : null,
+                source: entry.source
+                    ? Array.isArray(entry.source)
+                        ? entry.source
+                        : String(entry.source).split('\n')
+                    : null,
+                env: entry.env ?? {},
+                git: entry.git === true,
+                expected: String(entry.expected),
+            }
+        })
     }
     return cases
 }
