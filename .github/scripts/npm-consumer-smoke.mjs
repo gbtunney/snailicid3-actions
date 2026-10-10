@@ -44,6 +44,7 @@ const DEFAULT_CASES = join(SCRIPT_DIR, 'npm-consumer-smoke.cases.json')
 
 const INSTALL_TIMEOUT_MS = 10 * 60_000
 const RUN_TIMEOUT_MS = 60_000
+const DEFAULT_YARN_VERSION = '4.18.1'
 
 /** Extensions Node can evaluate as a module. Anything else is checked for resolution only. */
 const EVALUATED_EXTENSIONS = new Set(['.js', '.mjs', '.cjs'])
@@ -77,7 +78,9 @@ const usage = `Usage: npm-consumer-smoke.mjs [options]
   --outputs <file>       Write key=value outputs here (e.g. $GITHUB_OUTPUT)
   --mode <mode>          report (default) | abort_on_error
   --include-deprecated   Also test packages whose published version is deprecated
-  --keep                 Keep each temporary consumer project for inspection`
+  --keep                 Keep each temporary consumer project for inspection
+  --package-manager <pm> npm (default) | yarn — yarn is Yarn Berry in Plug'n'Play mode, via corepack
+  --yarn-version <ver>   Yarn version corepack runs (default ${DEFAULT_YARN_VERSION})`
 
 const parseArguments = (argv) => {
     const options = {
@@ -90,6 +93,8 @@ const parseArguments = (argv) => {
         outputs: '',
         mode: 'report',
         includeDeprecated: false,
+        packageManager: 'npm',
+        yarnVersion: DEFAULT_YARN_VERSION,
         keep: false,
     }
     const remaining = [...argv]
@@ -136,6 +141,12 @@ const parseArguments = (argv) => {
             case '--keep':
                 options.keep = true
                 break
+            case '--package-manager':
+                options.packageManager = value(argument)
+                break
+            case '--yarn-version':
+                options.yarnVersion = value(argument)
+                break
             case '--help':
             case '-h':
                 console.log(usage)
@@ -148,6 +159,11 @@ const parseArguments = (argv) => {
     if (!['report', 'abort_on_error'].includes(options.mode)) {
         throw new Error(
             `invalid --mode ${options.mode}; expected report or abort_on_error`,
+        )
+    }
+    if (!Object.hasOwn(PACKAGE_MANAGERS, options.packageManager)) {
+        throw new Error(
+            `invalid --package-manager ${options.packageManager}; expected ${Object.keys(PACKAGE_MANAGERS).join(' or ')}`,
         )
     }
     if (options.scope && !/^@[a-z0-9][a-z0-9._-]*$/.test(options.scope)) {
@@ -189,6 +205,9 @@ const run = (
             ...consumerEnvironment(),
             NO_COLOR: '1',
             FORCE_COLOR: '0',
+            // Corepack must fetch the pinned Yarn without an interactive prompt.
+            COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+            YARN_ENABLE_TELEMETRY: '0',
             ...env,
         },
         maxBuffer: 64 * 1024 * 1024,
@@ -357,7 +376,7 @@ const classifyFailure = (output, stage) => {
         return 'fail_import_export'
     }
     if (
-        /ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find (package|module)/.test(
+        /ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find (package|module)|tried to access .+ but it isn't (declared|provided)/.test(
             output,
         )
     )
@@ -367,7 +386,83 @@ const classifyFailure = (output, stage) => {
 
 /** The dependency Node could not find, when the failure names one. */
 const missingModule = (output) =>
-    /Cannot find (?:package|module) '([^']+)'/.exec(output)?.[1] ?? null
+    /Cannot find (?:package|module) '([^']+)'/.exec(output)?.[1] ??
+    // Yarn PnP: "<who> tried to access <name>, but it isn't declared…" or
+    // "<who> tried to access <name> (a peer dependency) but it isn't provided…"
+    /tried to access ([^\s,]+)[,\s]/.exec(output)?.[1] ??
+    null
+
+// ─── package managers ─────────────────────────────────────────
+
+/**
+ * How each package manager starts a project, installs, and runs code as a
+ * consumer would. Everything else — which entry points to try, the cases,
+ * classification and the report — is shared, so the managers are compared on
+ * identical tests.
+ */
+const PACKAGE_MANAGERS = {
+    npm: {
+        label: () => 'npm',
+        version: () => run('npm', ['--version']).stdout.trim(),
+        init: () => ['npm', ['init', '-y']],
+        // npm installs peer dependencies itself.
+        install: (spec) => ['npm', ['install', spec]],
+        list: (name) => ['npm', ['ls', name]],
+        runFile: (file) => [process.execPath, [file]],
+        runBin: (command) => ['npx', ['--no-install', ...command]],
+        warning: /^npm warn/i,
+        error: /^npm (error|ERR!)/i,
+        gitignore: ['node_modules'],
+        lockfile: (projectRoot, name, registry) => {
+            const lockPath = join(projectRoot, 'package-lock.json')
+            const locked = existsSync(lockPath)
+                ? readJson(lockPath).packages?.[`node_modules/${name}`]
+                : undefined
+            return {
+                resolved: locked?.resolved ?? null,
+                fromRegistry: Boolean(locked?.resolved?.startsWith(registry)),
+                version: locked?.version ?? null,
+            }
+        },
+    },
+    yarn: {
+        label: (context) => `yarn ${context.yarnVersion} (Plug'n'Play)`,
+        version: (context) => context.yarnVersion,
+        init: (context) => [
+            'corepack',
+            [`yarn@${context.yarnVersion}`, 'init', '-y'],
+        ],
+        // Yarn does not install peer dependencies; a consumer adds the ones
+        // the package asks for, which Yarn names in a YN0002 warning.
+        install: (spec, peers) => ['corepack', ['yarn', 'add', spec, ...peers]],
+        list: (name) => ['corepack', ['yarn', 'info', name, '--name-only']],
+        runFile: (file) => ['corepack', ['yarn', 'node', file]],
+        runBin: (command) => ['corepack', ['yarn', ...command]],
+        warning: /➤ YN0(002|060|086):/,
+        error: /➤ YN\d{4}: .*(Error|error|failed)|^Usage Error/,
+        gitignore: ['.yarn', '.pnp.*'],
+        lockfile: (projectRoot, name) => {
+            const lockPath = join(projectRoot, 'yarn.lock')
+            const text = existsSync(lockPath)
+                ? readFileSync(lockPath, 'utf8')
+                : ''
+            const entry = text
+                .split(/\n(?=\S)/)
+                .find((block) => block.startsWith(`"${name}@`))
+            const resolution = /resolution: "([^"]+)"/.exec(entry ?? '')?.[1]
+            return {
+                resolved: resolution ?? null,
+                fromRegistry: Boolean(resolution?.startsWith(`${name}@npm:`)),
+                version: /\n {2}version: (\S+)/.exec(entry ?? '')?.[1] ?? null,
+            }
+        },
+    },
+}
+
+const commandLine = ([command, args]) =>
+    [command === process.execPath ? 'node' : command, ...args]
+        .map((value) => shellQuote(value))
+        .join(' ')
 
 // ─── one package ──────────────────────────────────────────────
 
@@ -434,53 +529,67 @@ const smokePackage = (spec, context) => {
         return report
     }
 
-    // `npm init -y` names the project after its directory, so the directory
-    // must make a valid npm package name, as a person's project folder would.
-    const projectRoot = mkdtempSync(
-        join(
-            context.root,
-            `consumer-${name.replace(/^@/, '').replace(/\//g, '-')}-`,
-        ),
+    const pm = context.pm
+    // The registry manifest is the published package.json: what the package
+    // exports, its bins, and the peers a consumer may have to supply.
+    const published = npmJson(
+        ['view', `${name}@${report.version}`],
+        context.root,
     )
+    const manifest = published.ok && published.value ? published.value : {}
+
+    // `init -y` names the project after its directory, so the directory must
+    // be a valid lowercase package name, as a person's project folder would.
+    const projectRoot = join(
+        mkdtempSync(join(context.root, 'consumer-')),
+        `consumer-${name.replace(/^@/, '').replace(/\//g, '-')}`.toLowerCase(),
+    )
+    mkdirSync(projectRoot)
     report.projectRoot = projectRoot
 
     // 1 ── a fresh project, the way a person starts one.
-    const init = run('npm', ['init', '-y'], { cwd: projectRoot })
+    const initCommand = pm.init(context)
+    const init = run(...initCommand, { cwd: projectRoot })
+    report.initCommand = commandLine(initCommand)
     if (!init.ok) {
         report.result = 'fail_other'
         report.install = init
         report.notes.push(
-            '`npm init -y` failed before the package was involved.',
+            `\`${report.initCommand}\` failed before the package was involved.`,
         )
         return report
     }
 
     // 2 ── install from the registry, exact version so the report reproduces.
-    report.install = run('npm', ['install', `${name}@${report.version}`], {
-        cwd: projectRoot,
-        timeout: INSTALL_TIMEOUT_MS,
-    })
+    const optionalPeerNames = new Set(
+        Object.entries(manifest.peerDependenciesMeta ?? {})
+            .filter(([, meta]) => meta?.optional === true)
+            .map(([peer]) => peer),
+    )
+    const requiredPeers = Object.entries(manifest.peerDependencies ?? {})
+        .filter(([peer]) => !optionalPeerNames.has(peer))
+        .map(([peer, range]) => `${peer}@${range}`)
+    const installCommand = pm.install(
+        `${name}@${report.version}`,
+        requiredPeers,
+    )
+    report.install = {
+        ...run(...installCommand, {
+            cwd: projectRoot,
+            timeout: INSTALL_TIMEOUT_MS,
+        }),
+        command: commandLine(installCommand),
+    }
     if (!report.install.ok) {
         report.result = 'fail_install'
         return report
     }
 
-    report.npmLs = run('npm', ['ls', name], { cwd: projectRoot })
+    report.npmLs = run(...pm.list(name), { cwd: projectRoot })
 
     // The manual test forbids links, tarballs, git and workspace sources, so
     // prove the lockfile resolved the package from the registry.
-    const lock = existsSync(join(projectRoot, 'package-lock.json'))
-        ? readJson(join(projectRoot, 'package-lock.json'))
-        : null
-    const locked = lock?.packages?.[`node_modules/${name}`]
-    report.registryCheck = {
-        resolved: locked?.resolved ?? null,
-        fromRegistry: Boolean(locked?.resolved?.startsWith(context.registry)),
-        version: locked?.version ?? null,
-    }
-
-    const packageRoot = join(projectRoot, 'node_modules', ...name.split('/'))
-    const manifest = readJson(join(packageRoot, 'package.json'))
+    report.registryCheck = pm.lockfile(projectRoot, name, context.registry)
 
     // Bins are checked for presence only. Running an arbitrary bin with
     // `--help` is not safe in general — some set up or tear down files.
@@ -488,7 +597,23 @@ const smokePackage = (spec, context) => {
         typeof manifest.bin === 'string'
             ? { [name.split('/').pop()]: manifest.bin }
             : (manifest.bin ?? {})
+    const packageRoot = join(projectRoot, 'node_modules', ...name.split('/'))
     for (const [binName, target] of Object.entries(bins)) {
+        if (context.packageManager === 'yarn') {
+            // Plug'n'Play keeps packages zipped, so only Yarn can say whether
+            // it exposes the bin; file mode is not observable.
+            const located = run('corepack', ['yarn', 'bin', binName], {
+                cwd: projectRoot,
+            })
+            report.bins.push({
+                name: binName,
+                target,
+                targetExists: null,
+                linked: located.ok,
+                executable: null,
+            })
+            continue
+        }
         const linked = join(projectRoot, 'node_modules', '.bin', binName)
         const targetPath = join(packageRoot, target)
         report.bins.push({
@@ -504,11 +629,7 @@ const smokePackage = (spec, context) => {
     }
 
     // 3 ── import every declared public entry point.
-    const optionalPeers = new Set(
-        Object.entries(manifest.peerDependenciesMeta ?? {})
-            .filter(([, meta]) => meta?.optional === true)
-            .map(([peer]) => peer),
-    )
+    const optionalPeers = optionalPeerNames
     const entryPoints = publicEntryPoints(manifest)
     if (entryPoints.length === 0) {
         report.notes.push(
@@ -554,6 +675,7 @@ const smokePackage = (spec, context) => {
                     },
                     projectRoot,
                     optionalPeers,
+                    pm,
                 ),
             )
         } else if (importTarget) {
@@ -579,6 +701,7 @@ const smokePackage = (spec, context) => {
                     },
                     projectRoot,
                     optionalPeers,
+                    pm,
                 ),
             )
         }
@@ -613,6 +736,7 @@ const smokePackage = (spec, context) => {
                     },
                     projectRoot,
                     optionalPeers,
+                    pm,
                 ),
             )
         }
@@ -620,26 +744,26 @@ const smokePackage = (spec, context) => {
 
     // 4 ── execute documented functions and bins, when a case is registered.
     for (const [index, testCase] of (context.cases[name] ?? []).entries()) {
-        if (testCase.git) prepareGitRepository(projectRoot)
+        if (testCase.git) prepareGitRepository(projectRoot, pm)
         let file
         let source
         let runCommand
         let outcome
         if (testCase.command) {
             // A bin case runs the installed bin the way a user types it.
-            runCommand = ['npx', '--no-install', ...testCase.command]
-                .map(shellQuote)
-                .join(' ')
+            const binCommand = pm.runBin(testCase.command)
+            runCommand = commandLine(binCommand)
             source = runCommand
-            outcome = run('npx', ['--no-install', ...testCase.command], {
+            outcome = run(...binCommand, {
                 cwd: projectRoot,
                 env: testCase.env,
             })
         } else {
             file = `execute-${index}.${testCase.format === 'cjs' ? 'cjs' : 'mjs'}`
             source = writeTestFile(projectRoot, file, testCase.source)
-            runCommand = `node ${file}`
-            outcome = run(process.execPath, [file], {
+            const fileCommand = pm.runFile(file)
+            runCommand = commandLine(fileCommand)
+            outcome = run(...fileCommand, {
                 cwd: projectRoot,
                 env: testCase.env,
             })
@@ -680,15 +804,29 @@ const shellQuote = (value) =>
  * Turn the consumer project into the git repository a bin expects to run in:
  * dependencies ignored, everything else staged, nothing committed.
  */
-const prepareGitRepository = (projectRoot) => {
-    if (existsSync(join(projectRoot, '.git'))) return
-    writeFileSync(join(projectRoot, '.gitignore'), 'node_modules\n')
-    run('git', ['init', '-q'], { cwd: projectRoot })
+const prepareGitRepository = (projectRoot, pm) => {
+    // `yarn init` already made a repository; npm does not.
+    if (!existsSync(join(projectRoot, '.git'))) {
+        run('git', ['init', '-q'], { cwd: projectRoot })
+    }
+    const ignorePath = join(projectRoot, '.gitignore')
+    const ignored = existsSync(ignorePath)
+        ? readFileSync(ignorePath, 'utf8')
+        : ''
+    const missing = pm.gitignore.filter(
+        (entry) => !ignored.split('\n').includes(entry),
+    )
+    if (missing.length > 0) {
+        writeFileSync(
+            ignorePath,
+            `${ignored}${ignored && !ignored.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`,
+        )
+    }
     run('git', ['add', '-A'], { cwd: projectRoot })
 }
 
-const importCheck = (check, projectRoot, optionalPeers) => {
-    const outcome = run(process.execPath, [check.file], { cwd: projectRoot })
+const importCheck = (check, projectRoot, optionalPeers, pm) => {
+    const outcome = run(...pm.runFile(check.file), { cwd: projectRoot })
     const output = combinedOutput(outcome)
     const missing = outcome.ok ? null : missingModule(output)
     // An entry point documented as needing an optional peer cannot load
@@ -700,7 +838,7 @@ const importCheck = (check, projectRoot, optionalPeers) => {
             state: 'skipped',
             classification: null,
             missing,
-            detail: `Needs the optional peer dependency \`${missing}\`, which npm does not install; a consumer adds it to use this entry point.`,
+            detail: `Needs the optional peer dependency \`${missing}\`, which is not installed automatically; a consumer adds it to use this entry point.`,
         }
     }
     return {
@@ -762,7 +900,7 @@ const packageMarkdown = (report, environment) => {
             : RESULTS[report.result]
 
     push(
-        `# npm consumer smoke — \`${packageLabel(report)}\``,
+        `# ${environment.packageManager} consumer smoke — \`${packageLabel(report)}\``,
         '',
         `**Result:** ${label}`,
         '',
@@ -777,21 +915,33 @@ const packageMarkdown = (report, environment) => {
                 `Package: ${report.name}`,
                 `Installed package version: ${report.registryCheck?.version ?? report.version ?? 'n/a'}`,
                 `Node version: ${environment.node}`,
-                `npm version: ${environment.npm}`,
+                environment.packageManager === 'npm'
+                    ? `npm version: ${environment.npm}`
+                    : `Package manager: ${environment.packageManagerLabel}`,
                 `Operating system: ${environment.os}`,
             ].join('\n'),
         ),
         '',
     )
     if (report.npmLs)
-        push('`npm ls` output:', '', fence(combinedOutput(report.npmLs)), '')
+        push(
+            `\`${report.npmLs.command.replace(/^corepack /, '')}\` output:`,
+            '',
+            fence(combinedOutput(report.npmLs)),
+            '',
+        )
 
     push(
         '## 2. Installation',
         '',
         'Exact commands, run in an empty directory:',
         '',
-        fence(['npm init -y', report.install?.command ?? ''].join('\n'), 'sh'),
+        fence(
+            [report.initCommand ?? '', report.install?.command ?? '']
+                .filter(Boolean)
+                .join('\n'),
+            'sh',
+        ),
         '',
     )
     if (report.install) {
@@ -800,8 +950,8 @@ const packageMarkdown = (report, environment) => {
             fence(
                 [
                     `Install successful: ${yesNo(report.install.ok)}`,
-                    `Warnings: ${linesMatching(output, /^npm warn/i) || 'none'}`,
-                    `Errors: ${linesMatching(output, /^npm (error|ERR!)/i) || 'none'}`,
+                    `Warnings: ${linesMatching(output, PACKAGE_MANAGERS[environment.packageManager].warning) || 'none'}`,
+                    `Errors: ${linesMatching(output, PACKAGE_MANAGERS[environment.packageManager].error) || 'none'}`,
                 ].join('\n'),
             ),
             '',
@@ -961,15 +1111,15 @@ const summaryMarkdown = (reports, environment, options) => {
     const failed = reports.filter((report) => report.result.startsWith('fail_'))
 
     out.push(
-        `## 📦 npm consumer smoke — ${options.scope || 'selected packages'}`,
+        `## 📦 ${environment.packageManager} consumer smoke — ${options.scope || 'selected packages'}`,
         '',
     )
     out.push(
-        `Node \`${environment.node}\` · npm \`${environment.npm}\` · ${environment.os} · registry \`${environment.registry}\``,
+        `Node \`${environment.node}\` · ${environment.packageManagerLabel}${environment.packageManager === 'npm' ? ` \`${environment.npm}\`` : ''} · ${environment.os} · registry \`${environment.registry}\``,
         '',
     )
     out.push(
-        `**${reports.length - failed.length - (counts.skipped_deprecated ?? 0)} passed · ${failed.length} failed${counts.skipped_deprecated ? ` · ${counts.skipped_deprecated} skipped (deprecated)` : ''}** of ${reports.length} package(s). Every package was installed with plain \`npm install <name>@<version>\` into its own empty \`npm init -y\` project — no pnpm, no workspace, no links, no local tarballs.`,
+        `**${reports.length - failed.length - (counts.skipped_deprecated ?? 0)} passed · ${failed.length} failed${counts.skipped_deprecated ? ` · ${counts.skipped_deprecated} skipped (deprecated)` : ''}** of ${reports.length} package(s). ${environment.packageManager === 'npm' ? 'Every package was installed with plain `npm install <name>@<version>` into its own empty `npm init -y` project' : `Every package was installed with \`yarn add <name>@<version>\` plus its own required peers (Yarn does not install peers) into its own empty \`yarn init -y\` project, in Plug'n'Play mode with no node_modules`} — no pnpm, no workspace, no links, no local tarballs.`,
         '',
     )
     out.push(
@@ -1090,9 +1240,13 @@ const main = async () => {
     const registry =
         run('npm', ['config', 'get', 'registry']).stdout.trim() ||
         'https://registry.npmjs.org/'
+    const pm = PACKAGE_MANAGERS[options.packageManager]
+    const pmContext = { yarnVersion: options.yarnVersion }
     const environment = {
         node: process.version,
         npm: run('npm', ['--version']).stdout.trim(),
+        packageManager: options.packageManager,
+        packageManagerLabel: pm.label(pmContext),
         os: readOsName(),
         registry,
     }
@@ -1112,9 +1266,12 @@ const main = async () => {
         cases,
         registry,
         includeDeprecated: options.includeDeprecated,
+        packageManager: options.packageManager,
+        pm,
+        ...pmContext,
     }
     console.log(
-        `npm consumer smoke: ${specs.length} package(s) · node ${environment.node} · npm ${environment.npm}`,
+        `consumer smoke: ${specs.length} package(s) · node ${environment.node} · ${environment.packageManagerLabel}`,
     )
 
     const reports = []
@@ -1156,7 +1313,7 @@ const main = async () => {
         const level = options.mode === 'abort_on_error' ? 'error' : 'warning'
         for (const report of failed) {
             console.log(
-                `::${level} title=npm consumer smoke (node ${process.version})::${packageLabel(report)} — ${RESULTS[report.result]}`,
+                `::${level} title=${options.packageManager} consumer smoke (node ${process.version})::${packageLabel(report)} — ${RESULTS[report.result]}`,
             )
         }
     }

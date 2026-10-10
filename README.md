@@ -357,6 +357,14 @@ the full reports are the `npm-consumer-smoke-*` artifact. Failures are warning
 annotations and do not fail the run unless it is dispatched with
 `mode: abort_on_error`.
 
+Every package is also run as a **Yarn** consumer (Yarn Berry, Plug'n'Play,
+through the corepack bundled with Node). npm is the lenient case — it hoists
+and installs peers itself — and Yarn PnP is the strict one: no `node_modules`,
+and an undeclared dependency anywhere in the tree fails. Yarn does not install
+peers, so the smoke adds each package's own required peers, as a Yarn user
+would; anything missing further down is a finding. Pass
+`--package-manager yarn` locally, or `package_manager: yarn` to the workflow.
+
 Run it locally with nothing but Node:
 
 ```sh

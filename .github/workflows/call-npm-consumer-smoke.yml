@@ -46,6 +46,13 @@ on:
                 default: report
                 type: string
 
+            package_manager:
+                description: >
+                    npm (default) or yarn. yarn is Yarn Berry in Plug'n'Play mode through the corepack bundled with Node, adding each package's own required peers because Yarn does not install them.
+                required: false
+                default: npm
+                type: string
+
             node_version:
                 description: Node version the consumer runs. npm is whatever that Node ships with.
                 required: false
@@ -84,7 +91,7 @@ permissions:
 
 jobs:
     smoke:
-        name: npm consumer (node ${{ inputs.node_version }})
+        name: ${{ inputs.package_manager }} consumer (node ${{ inputs.node_version }})
         runs-on: ubuntu-latest
 
         outputs:
@@ -97,11 +104,16 @@ jobs:
               shell: bash
               env:
                   MODE: ${{ inputs.mode }}
+                  PACKAGE_MANAGER: ${{ inputs.package_manager }}
               run: |
                   set -euo pipefail
                   case "$MODE" in
                     report|abort_on_error) ;;
                     *) echo "::error::Invalid mode: $MODE. Expected report or abort_on_error."; exit 1 ;;
+                  esac
+                  case "$PACKAGE_MANAGER" in
+                    npm|yarn) ;;
+                    *) echo "::error::Invalid package_manager: $PACKAGE_MANAGER. Expected npm or yarn."; exit 1 ;;
                   esac
 
             - name: Checkout smoke harness
@@ -125,7 +137,7 @@ jobs:
               with:
                   node-version: ${{ inputs.node_version }}
 
-            - name: Run npm consumer smoke
+            - name: Run consumer smoke
               id: smoke
               shell: bash
               # Outside the checkouts, so no repository package.json or .npmrc
@@ -135,11 +147,12 @@ jobs:
                   PACKAGES: ${{ inputs.packages }}
                   SCOPE: ${{ inputs.scope }}
                   MODE: ${{ inputs.mode }}
+                  PACKAGE_MANAGER: ${{ inputs.package_manager }}
                   CASES_PATH: ${{ inputs.cases_path }}
               run: |
                   set -euo pipefail
 
-                  args=(--mode "$MODE" --out "$RUNNER_TEMP/npm-consumer-smoke" --summary "$GITHUB_STEP_SUMMARY" --outputs "$GITHUB_OUTPUT")
+                  args=(--mode "$MODE" --package-manager "$PACKAGE_MANAGER" --out "$RUNNER_TEMP/npm-consumer-smoke" --summary "$GITHUB_STEP_SUMMARY" --outputs "$GITHUB_OUTPUT")
                   if [[ -n "${PACKAGES// /}" ]]; then
                     args+=(--package "$PACKAGES")
                   else
@@ -155,7 +168,7 @@ jobs:
               if: ${{ always() }}
               uses: actions/upload-artifact@v7
               with:
-                  name: npm-consumer-smoke-node${{ inputs.node_version }}-${{ github.run_id }}-${{ github.run_attempt }}
+                  name: ${{ inputs.package_manager }}-consumer-smoke-node${{ inputs.node_version }}-${{ github.run_id }}-${{ github.run_attempt }}
                   path: ${{ runner.temp }}/npm-consumer-smoke
                   if-no-files-found: ignore
                   overwrite: true

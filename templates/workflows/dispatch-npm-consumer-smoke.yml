@@ -32,6 +32,15 @@ on:
                     - report
                     - abort_on_error
 
+            package_manager:
+                description: npm, or yarn (Yarn Berry in Plug'n'Play mode)
+                required: true
+                default: npm
+                type: choice
+                options:
+                    - npm
+                    - yarn
+
             node_version:
                 description: Node version the consumer runs
                 required: true
@@ -51,5 +60,6 @@ jobs:
             packages: ${{ inputs.packages }}
             scope: ${{ inputs.scope }}
             mode: ${{ inputs.mode }}
+            package_manager: ${{ inputs.package_manager }}
             node_version: ${{ inputs.node_version }}
             harness_ref: v2
